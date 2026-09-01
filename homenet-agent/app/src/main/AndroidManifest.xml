@@ -9,7 +9,7 @@
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
-            android:name=".ProbeActivity"
+            android:name=".WebViewBridgeActivity"
             android:exported="true"
             android:screenOrientation="portrait">
             <intent-filter>
@@ -17,5 +17,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".ProbeActivity" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="false" />
     </application>
 </manifest>
