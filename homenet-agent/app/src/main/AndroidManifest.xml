@@ -9,7 +9,7 @@
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
-            android:name=".MainActivity"
+            android:name=".ProbeActivity"
             android:exported="true"
             android:screenOrientation="portrait">
             <intent-filter>
