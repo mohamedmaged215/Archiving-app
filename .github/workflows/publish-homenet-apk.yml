@@ -36,16 +36,28 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build compatible APK
+      - name: Prepare release keystore
+        env:
+          HOMENET_KEYSTORE_BASE64: ${{ secrets.HOMENET_KEYSTORE_BASE64 }}
+        run: echo "$HOMENET_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/homenet-release.p12"
+
+      - name: Build signed release APK
         working-directory: homenet-agent
-        run: gradle :app:assembleDebug --stacktrace
+        env:
+          HOMENET_KEYSTORE_PATH: ${{ runner.temp }}/homenet-release.p12
+          HOMENET_KEYSTORE_PASSWORD: ${{ secrets.HOMENET_KEYSTORE_PASSWORD }}
+          HOMENET_KEY_PASSWORD: ${{ secrets.HOMENET_KEY_PASSWORD }}
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Verify APK signature
+        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs homenet-agent/app/build/outputs/apk/release/app-release.apk
 
       - name: Publish APK in repository
         run: |
-          cp homenet-agent/app/build/outputs/apk/debug/app-debug.apk HomeNet-Agent-latest.apk
-          cp homenet-agent/app/build/outputs/apk/debug/app-debug.apk HomeNet-Agent-v0.1.7.apk
+          cp homenet-agent/app/build/outputs/apk/release/app-release.apk HomeNet-Agent-latest.apk
+          cp homenet-agent/app/build/outputs/apk/release/app-release.apk HomeNet-Agent-v0.1.8.apk
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f HomeNet-Agent-latest.apk HomeNet-Agent-v0.1.7.apk
-          git commit -m "Publish HomeNet Agent v0.1.7 APK" || exit 0
+          git add -f HomeNet-Agent-latest.apk HomeNet-Agent-v0.1.8.apk
+          git commit -m "Publish signed HomeNet Agent v0.1.8 APK" || exit 0
           git push

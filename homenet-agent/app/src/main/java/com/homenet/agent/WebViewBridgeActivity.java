@@ -42,7 +42,7 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.1.7");
+        title.setText("HomeNet Agent v0.1.8");
         title.setTextSize(22);
         root.addView(title);
 

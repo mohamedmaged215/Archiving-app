@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+def releaseKeystorePath = System.getenv('HOMENET_KEYSTORE_PATH')
+def releaseKeystorePassword = System.getenv('HOMENET_KEYSTORE_PASSWORD')
+def releaseKeyPassword = System.getenv('HOMENET_KEY_PASSWORD')
+def hasReleaseSigning = releaseKeystorePath && releaseKeystorePassword && releaseKeyPassword
+
 android {
     namespace 'com.homenet.agent'
     compileSdk 35
@@ -10,13 +15,31 @@ android {
         applicationId 'com.homenet.agent'
         minSdk 19
         targetSdk 35
-        versionCode 7
-        versionName '0.1.7'
+        versionCode 8
+        versionName '0.1.8'
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseKeystorePath)
+                storePassword releaseKeystorePassword
+                keyAlias 'homenet-agent'
+                keyPassword releaseKeyPassword
+                storeType 'PKCS12'
+            }
+        }
     }
 
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+        }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
