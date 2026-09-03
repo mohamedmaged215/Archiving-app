@@ -2,6 +2,8 @@ package com.homenet.agent;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.method.ScrollingMovementMethod;
 import android.view.View;
 import android.view.ViewGroup;
@@ -30,20 +32,26 @@ public class WebViewBridgeActivity extends Activity {
     private TextView status;
     private TextView output;
     private final String routerBase = "http://192.168.0.1";
+    private static final long AUTO_CAPTURE_INTERVAL_MS = 60_000L;
     private final List<DeviceSnapshot> latestSnapshots = new ArrayList<>();
     private HomeNetDatabase database;
+    private Handler autoCaptureHandler;
+    private Button autoCaptureButton;
+    private boolean autoCaptureEnabled;
+    private boolean readInProgress;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         database = new HomeNetDatabase(this);
+        autoCaptureHandler = new Handler(Looper.getMainLooper());
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(10), dp(10), dp(10), dp(10));
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.2.0");
+        title.setText("HomeNet Agent v0.2.1");
         title.setTextSize(22);
         root.addView(title);
 
@@ -67,9 +75,9 @@ public class WebViewBridgeActivity extends Activity {
         Button usageSummary = new Button(this);
         usageSummary.setText("ملخص الاستهلاك");
         secondaryButtons.addView(usageSummary, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button diagnostics = new Button(this);
-        diagnostics.setText("تشخيص الصفحة والـ frames");
-        secondaryButtons.addView(diagnostics, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        autoCaptureButton = new Button(this);
+        autoCaptureButton.setText("تشغيل القراءة التلقائية");
+        secondaryButtons.addView(autoCaptureButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(secondaryButtons);
 
         status = new TextView(this);
@@ -103,9 +111,9 @@ public class WebViewBridgeActivity extends Activity {
         root.addView(output, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(210)));
 
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
-        readDevices.setOnClickListener(v -> readDevices());
+        readDevices.setOnClickListener(v -> readDevices(false));
         usageSummary.setOnClickListener(v -> showUsageSummary());
-        diagnostics.setOnClickListener(v -> readCurrentPage());
+        autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
         setContentView(root);
         web.loadUrl(routerBase);
     }
@@ -143,8 +151,35 @@ public class WebViewBridgeActivity extends Activity {
         }
     }
 
-    private void readDevices() {
-        status.setText("جاري استخراج الأجهزة من جدول Statistics…");
+    private void toggleAutoCapture() {
+        autoCaptureEnabled = !autoCaptureEnabled;
+        autoCaptureHandler.removeCallbacksAndMessages(null);
+        if (autoCaptureEnabled) {
+            autoCaptureButton.setText("إيقاف القراءة التلقائية");
+            status.setText("بدأت القراءة التلقائية كل 60 ثانية.");
+            readDevices(true);
+        } else {
+            autoCaptureButton.setText("تشغيل القراءة التلقائية");
+            status.setText("تم إيقاف القراءة التلقائية.");
+        }
+    }
+
+    private void scheduleNextAutomaticCapture(long delayMs) {
+        autoCaptureHandler.removeCallbacksAndMessages(null);
+        if (autoCaptureEnabled) {
+            autoCaptureHandler.postDelayed(() -> readDevices(true), delayMs);
+        }
+    }
+
+    private void readDevices(boolean automatic) {
+        if (readInProgress) {
+            if (automatic) scheduleNextAutomaticCapture(5_000L);
+            return;
+        }
+        readInProgress = true;
+        status.setText(automatic
+                ? "جاري حفظ لقطة تلقائية من Statistics…"
+                : "جاري استخراج الأجهزة من جدول Statistics…");
         String js = "(function(){" +
                 "var devices=[],seen={};" +
                 "function scan(w){try{" +
@@ -204,10 +239,14 @@ public class WebViewBridgeActivity extends Activity {
                 output.setText(result.toString().trim());
                 status.setText(devices.length() == 0
                         ? "لم أجد صفوف أجهزة. افتح Statistics أولًا ثم أعد القراءة."
-                        : "تم حفظ اللقطة محليًا وحساب الفرق عن القراءة السابقة.");
+                        : "تم حفظ اللقطة محليًا وحساب الفرق عن القراءة السابقة." +
+                                (automatic ? " القراءة التالية خلال 60 ثانية." : ""));
             } catch (Exception e) {
                 output.setText("فشل تحليل نتيجة Statistics:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
                 status.setText("حدث خطأ أثناء تحليل الجدول.");
+            } finally {
+                readInProgress = false;
+                if (automatic) scheduleNextAutomaticCapture(AUTO_CAPTURE_INTERVAL_MS);
             }
         });
     }
@@ -301,6 +340,11 @@ public class WebViewBridgeActivity extends Activity {
     }
 
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
-    @Override protected void onDestroy(){if(database!=null)database.close();super.onDestroy();}
+    @Override protected void onDestroy(){
+        autoCaptureEnabled=false;
+        if(autoCaptureHandler!=null)autoCaptureHandler.removeCallbacksAndMessages(null);
+        if(database!=null)database.close();
+        super.onDestroy();
+    }
     @Override public void onBackPressed(){if(web!=null&&web.canGoBack())web.goBack();else super.onBackPressed();}
 }
