@@ -11,7 +11,7 @@ import java.util.List;
 
 final class HomeNetDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "homenet.db";
-    private static final int DATABASE_VERSION = 1;
+    private static final int DATABASE_VERSION = 2;
 
     HomeNetDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -33,17 +33,28 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
                 ")");
         db.execSQL("CREATE INDEX idx_traffic_snapshots_mac_time " +
                 "ON traffic_snapshots(mac, captured_at DESC, id DESC)");
+        createDeviceProfilesTable(db);
     }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        // Future schema upgrades will preserve collected traffic history.
+        if (oldVersion < 2) createDeviceProfilesTable(db);
+    }
+
+    private void createDeviceProfilesTable(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS device_profiles (" +
+                "mac TEXT PRIMARY KEY," +
+                "device_name TEXT," +
+                "last_ip TEXT," +
+                "updated_at INTEGER NOT NULL" +
+                ")");
     }
 
     SaveResult saveSnapshot(String ip, String mac, long capturedAt,
                             long packetsTotal, long bytesTotal,
                             long packetsCurrent, long bytesCurrent) {
         SQLiteDatabase db = getWritableDatabase();
+        ensureDeviceProfile(db, mac, ip, capturedAt);
         long previousTotal = 0;
         boolean firstSnapshot = true;
 
@@ -80,12 +91,54 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
         return new SaveResult(firstSnapshot, counterReset, previousTotal, deltaBytes);
     }
 
+    private void ensureDeviceProfile(SQLiteDatabase db, String mac, String ip, long updatedAt) {
+        ContentValues initial = new ContentValues();
+        initial.put("mac", mac);
+        initial.put("last_ip", ip);
+        initial.put("updated_at", updatedAt);
+        db.insertWithOnConflict("device_profiles", null, initial, SQLiteDatabase.CONFLICT_IGNORE);
+
+        ContentValues latest = new ContentValues();
+        latest.put("last_ip", ip);
+        latest.put("updated_at", updatedAt);
+        db.update("device_profiles", latest, "mac = ?", new String[]{mac});
+    }
+
+    void saveDeviceIdentity(String ip, String mac, String deviceName, long updatedAt) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put("mac", mac);
+        values.put("last_ip", ip);
+        values.put("updated_at", updatedAt);
+        if (deviceName != null && !deviceName.trim().isEmpty()) {
+            values.put("device_name", deviceName.trim());
+        }
+        db.insertWithOnConflict("device_profiles", null, values, SQLiteDatabase.CONFLICT_IGNORE);
+        db.update("device_profiles", values, "mac = ?", new String[]{mac});
+    }
+
+    String getDeviceName(String mac) {
+        try (Cursor cursor = getReadableDatabase().query(
+                "device_profiles",
+                new String[]{"device_name"},
+                "mac = ?",
+                new String[]{mac},
+                null,
+                null,
+                null,
+                "1")) {
+            if (cursor.moveToFirst() && !cursor.isNull(0)) return cursor.getString(0);
+        }
+        return "";
+    }
+
     List<UsageSummary> getUsageSummaries(long todayStartedAt, long sevenDaysAgo) {
         SQLiteDatabase db = getReadableDatabase();
         List<UsageSummary> summaries = new ArrayList<>();
         String sql = "SELECT s.mac," +
                 "(SELECT latest.ip FROM traffic_snapshots latest WHERE latest.mac = s.mac " +
                 "ORDER BY latest.captured_at DESC, latest.id DESC LIMIT 1) AS latest_ip," +
+                "COALESCE((SELECT p.device_name FROM device_profiles p WHERE p.mac = s.mac), '') AS device_name," +
                 "SUM(CASE WHEN s.captured_at >= ? THEN s.delta_bytes ELSE 0 END) AS today_usage," +
                 "SUM(CASE WHEN s.captured_at >= ? THEN s.delta_bytes ELSE 0 END) AS seven_day_usage," +
                 "SUM(s.delta_bytes) AS total_usage," +
@@ -101,11 +154,12 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
                 summaries.add(new UsageSummary(
                         cursor.getString(0),
                         cursor.getString(1),
-                        cursor.getLong(2),
+                        cursor.getString(2),
                         cursor.getLong(3),
                         cursor.getLong(4),
                         cursor.getLong(5),
-                        cursor.getLong(6)
+                        cursor.getLong(6),
+                        cursor.getLong(7)
                 ));
             }
         }
@@ -129,16 +183,18 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
     static final class UsageSummary {
         final String mac;
         final String latestIp;
+        final String deviceName;
         final long todayBytes;
         final long sevenDayBytes;
         final long totalBytes;
         final long snapshotCount;
         final long lastCapturedAt;
 
-        UsageSummary(String mac, String latestIp, long todayBytes, long sevenDayBytes,
+        UsageSummary(String mac, String latestIp, String deviceName, long todayBytes, long sevenDayBytes,
                      long totalBytes, long snapshotCount, long lastCapturedAt) {
             this.mac = mac;
             this.latestIp = latestIp;
+            this.deviceName = deviceName;
             this.todayBytes = todayBytes;
             this.sevenDayBytes = sevenDayBytes;
             this.totalBytes = totalBytes;

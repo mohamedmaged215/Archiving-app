@@ -51,12 +51,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.2.2");
+        title.setText("HomeNet Agent v0.2.3");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("سجّل الدخول مرة، ثم استخدم فتح Statistics آليًا. التطبيق يضغط عنصر القائمة الأصلي داخل الـ frame دون تركيب URL.");
+        help.setText("سجّل الدخول مرة، ثم حدّث أسماء الأجهزة من DHCP Clients. تُحفظ الأسماء وتظهر مع قراءات Statistics.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -79,6 +79,10 @@ public class WebViewBridgeActivity extends Activity {
         autoCaptureButton.setText("تشغيل القراءة التلقائية");
         secondaryButtons.addView(autoCaptureButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(secondaryButtons);
+
+        Button readDeviceNames = new Button(this);
+        readDeviceNames.setText("تحديث أسماء الأجهزة من DHCP");
+        root.addView(readDeviceNames, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         Button usageSummary = new Button(this);
         usageSummary.setText("ملخص الاستهلاك");
@@ -117,6 +121,7 @@ public class WebViewBridgeActivity extends Activity {
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
         openStatistics.setOnClickListener(v -> clickStatisticsMenu(null));
         readDevices.setOnClickListener(v -> readDevices(false));
+        readDeviceNames.setOnClickListener(v -> openDhcpClientsAndReadNames(0));
         usageSummary.setOnClickListener(v -> showUsageSummary());
         autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
         setContentView(root);
@@ -139,7 +144,9 @@ public class WebViewBridgeActivity extends Activity {
             StringBuilder result = new StringBuilder("ملخص الاستهلاك المحفوظ\n\n");
             for (int i = 0; i < summaries.size(); i++) {
                 HomeNetDatabase.UsageSummary summary = summaries.get(i);
-                result.append(i + 1).append(") ").append(summary.latestIp).append("\n")
+                result.append(i + 1).append(") ")
+                        .append(displayName(summary.deviceName)).append("\n")
+                        .append("IP: ").append(summary.latestIp).append("\n")
                         .append("MAC: ").append(summary.mac).append("\n")
                         .append("اليوم: ").append(formatBytes(summary.todayBytes)).append("\n")
                         .append("آخر 7 أيام: ").append(formatBytes(summary.sevenDayBytes)).append("\n")
@@ -193,6 +200,88 @@ public class WebViewBridgeActivity extends Activity {
                     autoCaptureEnabled = false;
                     autoCaptureButton.setText("تشغيل القراءة التلقائية");
                 }
+            }
+        });
+    }
+
+    private void openDhcpClientsAndReadNames(int attempt) {
+        status.setText(attempt == 0
+                ? "جاري فتح DHCP Clients من قائمة الراوتر…"
+                : "جاري البحث عن DHCP Clients بعد فتح قائمة DHCP…");
+        String js = "(function(){" +
+                "function norm(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');}" +
+                "function clickText(w,target){try{" +
+                "var links=w.document.getElementsByTagName('a');" +
+                "for(var i=0;i<links.length;i++){if(norm(links[i].innerText||links[i].textContent)===target){links[i].click();return true;}}" +
+                "for(var j=0;j<w.frames.length;j++){if(clickText(w.frames[j],target))return true;}" +
+                "}catch(e){}return false;}" +
+                "if(clickText(window,'dhcpclients'))return 'target';" +
+                "if(clickText(window,'dhcp'))return 'parent';" +
+                "return 'none';" +
+                "})()";
+        web.evaluateJavascript(js, value -> {
+            String result = decodeJs(value);
+            if ("target".equals(result)) {
+                status.setText("تم فتح DHCP Clients. جاري استخراج الأسماء…");
+                autoCaptureHandler.postDelayed(this::readDeviceNames, 2_500L);
+            } else if ("parent".equals(result) && attempt < 3) {
+                autoCaptureHandler.postDelayed(() -> openDhcpClientsAndReadNames(attempt + 1), 1_000L);
+            } else {
+                status.setText("لم أجد DHCP Clients. تأكد من تسجيل الدخول وظهور قائمة DHCP.");
+            }
+        });
+    }
+
+    private void readDeviceNames() {
+        status.setText("جاري قراءة أسماء الأجهزة من جدول DHCP Clients…");
+        String js = "(function(){" +
+                "var out=[],seen={};" +
+                "function clean(v){return String(v||'').replace(/\\s+/g,' ').trim();}" +
+                "function scan(w){try{" +
+                "var rows=w.document.querySelectorAll('tr');" +
+                "for(var r=0;r<rows.length;r++){" +
+                "var cells=rows[r].querySelectorAll('td,th'),vals=[];" +
+                "for(var c=0;c<cells.length;c++)vals.push(clean(cells[c].innerText||cells[c].textContent));" +
+                "var joined=vals.join(' | ');" +
+                "var ips=joined.match(/(?:\\d{1,3}\\.){3}\\d{1,3}/g)||[];" +
+                "var macs=joined.match(/(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/g)||[];" +
+                "if(ips.length!==1||macs.length!==1)continue;var ipm=[ips[0]],macm=[macs[0]];" +
+                "var name='';" +
+                "for(var i=0;i<vals.length;i++){var v=vals[i];" +
+                "if(!v||v.indexOf(ipm[0])>=0||v.toUpperCase().indexOf(macm[0].toUpperCase())>=0)continue;" +
+                "if(/^\\d+$/.test(v)||/^\\d{1,3}:\\d{1,2}:\\d{1,2}$/.test(v))continue;" +
+                "if(/client|address|lease|assigned|refresh|id/i.test(v))continue;" +
+                "name=v;break;}" +
+                "var mac=macm[0].replace(/-/g,':').toUpperCase();" +
+                "if(!seen[mac]){seen[mac]=true;out.push({ip:ipm[0],mac:mac,name:name});}" +
+                "}" +
+                "for(var j=0;j<w.frames.length;j++)scan(w.frames[j]);" +
+                "}catch(e){}}" +
+                "scan(window);return JSON.stringify(out);" +
+                "})()";
+        web.evaluateJavascript(js, value -> {
+            try {
+                JSONArray devices = new JSONArray(decodeJs(value));
+                long capturedAt = System.currentTimeMillis();
+                StringBuilder result = new StringBuilder("أسماء الأجهزة من DHCP Clients\n\n");
+                int namedCount = 0;
+                for (int i = 0; i < devices.length(); i++) {
+                    JSONObject device = devices.getJSONObject(i);
+                    String name = device.optString("name", "").trim();
+                    String ip = device.getString("ip");
+                    String mac = device.getString("mac");
+                    database.saveDeviceIdentity(ip, mac, name, capturedAt);
+                    if (!name.isEmpty()) namedCount++;
+                    result.append(i + 1).append(") ").append(displayName(name)).append("\n")
+                            .append("IP: ").append(ip).append("\n")
+                            .append("MAC: ").append(mac).append("\n\n");
+                }
+                if (devices.length() == 0) result.append("لم أجد أجهزة في جدول DHCP Clients.");
+                output.setText(result.toString().trim());
+                status.setText("تم حفظ " + devices.length() + " جهاز، منها " + namedCount + " باسم ظاهر من الراوتر.");
+            } catch (Exception e) {
+                output.setText("فشل تحليل DHCP Clients:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
+                status.setText("حدث خطأ أثناء قراءة أسماء الأجهزة.");
             }
         });
     }
@@ -251,6 +340,7 @@ public class WebViewBridgeActivity extends Activity {
                             capturedAt
                     );
                     latestSnapshots.add(snapshot);
+                    String deviceName = database.getDeviceName(snapshot.mac);
                     HomeNetDatabase.SaveResult saved = database.saveSnapshot(
                             snapshot.ip,
                             snapshot.mac,
@@ -260,7 +350,8 @@ public class WebViewBridgeActivity extends Activity {
                             snapshot.packetsCurrent,
                             snapshot.bytesCurrent
                     );
-                    result.append(i + 1).append(") ").append(snapshot.ip).append("\n")
+                    result.append(i + 1).append(") ").append(displayName(deviceName)).append("\n")
+                            .append("IP: ").append(snapshot.ip).append("\n")
                             .append("MAC: ").append(snapshot.mac).append("\n")
                             .append("Total Bytes: ").append(String.format(Locale.US, "%,d", snapshot.bytesTotal))
                             .append(" (").append(formatBytes(snapshot.bytesTotal)).append(")\n")
@@ -342,6 +433,10 @@ public class WebViewBridgeActivity extends Activity {
 
     private String formatTimestamp(long timestamp) {
         return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(timestamp));
+    }
+
+    private String displayName(String name) {
+        return name == null || name.trim().isEmpty() ? "جهاز بدون اسم" : name.trim();
     }
 
     private String usageSincePrevious(HomeNetDatabase.SaveResult saved) {
