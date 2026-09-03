@@ -6,6 +6,9 @@ import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 
+import java.util.ArrayList;
+import java.util.List;
+
 final class HomeNetDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "homenet.db";
     private static final int DATABASE_VERSION = 1;
@@ -77,6 +80,38 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
         return new SaveResult(firstSnapshot, counterReset, previousTotal, deltaBytes);
     }
 
+    List<UsageSummary> getUsageSummaries(long todayStartedAt, long sevenDaysAgo) {
+        SQLiteDatabase db = getReadableDatabase();
+        List<UsageSummary> summaries = new ArrayList<>();
+        String sql = "SELECT s.mac," +
+                "(SELECT latest.ip FROM traffic_snapshots latest WHERE latest.mac = s.mac " +
+                "ORDER BY latest.captured_at DESC, latest.id DESC LIMIT 1) AS latest_ip," +
+                "SUM(CASE WHEN s.captured_at >= ? THEN s.delta_bytes ELSE 0 END) AS today_usage," +
+                "SUM(CASE WHEN s.captured_at >= ? THEN s.delta_bytes ELSE 0 END) AS seven_day_usage," +
+                "SUM(s.delta_bytes) AS total_usage," +
+                "COUNT(*) AS snapshot_count," +
+                "MAX(s.captured_at) AS last_captured_at " +
+                "FROM traffic_snapshots s GROUP BY s.mac ORDER BY total_usage DESC";
+
+        try (Cursor cursor = db.rawQuery(sql, new String[]{
+                String.valueOf(todayStartedAt),
+                String.valueOf(sevenDaysAgo)
+        })) {
+            while (cursor.moveToNext()) {
+                summaries.add(new UsageSummary(
+                        cursor.getString(0),
+                        cursor.getString(1),
+                        cursor.getLong(2),
+                        cursor.getLong(3),
+                        cursor.getLong(4),
+                        cursor.getLong(5),
+                        cursor.getLong(6)
+                ));
+            }
+        }
+        return summaries;
+    }
+
     static final class SaveResult {
         final boolean firstSnapshot;
         final boolean counterReset;
@@ -88,6 +123,27 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
             this.counterReset = counterReset;
             this.previousTotal = previousTotal;
             this.deltaBytes = deltaBytes;
+        }
+    }
+
+    static final class UsageSummary {
+        final String mac;
+        final String latestIp;
+        final long todayBytes;
+        final long sevenDayBytes;
+        final long totalBytes;
+        final long snapshotCount;
+        final long lastCapturedAt;
+
+        UsageSummary(String mac, String latestIp, long todayBytes, long sevenDayBytes,
+                     long totalBytes, long snapshotCount, long lastCapturedAt) {
+            this.mac = mac;
+            this.latestIp = latestIp;
+            this.todayBytes = todayBytes;
+            this.sevenDayBytes = sevenDayBytes;
+            this.totalBytes = totalBytes;
+            this.snapshotCount = snapshotCount;
+            this.lastCapturedAt = lastCapturedAt;
         }
     }
 }

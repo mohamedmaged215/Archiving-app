@@ -20,6 +20,7 @@ import org.json.JSONTokener;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -42,7 +43,7 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.1.9");
+        title.setText("HomeNet Agent v0.2.0");
         title.setTextSize(22);
         root.addView(title);
 
@@ -61,9 +62,15 @@ public class WebViewBridgeActivity extends Activity {
         buttons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(buttons);
 
+        LinearLayout secondaryButtons = new LinearLayout(this);
+        secondaryButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button usageSummary = new Button(this);
+        usageSummary.setText("ملخص الاستهلاك");
+        secondaryButtons.addView(usageSummary, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         Button diagnostics = new Button(this);
         diagnostics.setText("تشخيص الصفحة والـ frames");
-        root.addView(diagnostics, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        secondaryButtons.addView(diagnostics, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        root.addView(secondaryButtons);
 
         status = new TextView(this);
         status.setText("افتح الراوتر وسجّل الدخول أولاً.");
@@ -97,9 +104,43 @@ public class WebViewBridgeActivity extends Activity {
 
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
         readDevices.setOnClickListener(v -> readDevices());
+        usageSummary.setOnClickListener(v -> showUsageSummary());
         diagnostics.setOnClickListener(v -> readCurrentPage());
         setContentView(root);
         web.loadUrl(routerBase);
+    }
+
+    private void showUsageSummary() {
+        Calendar startOfToday = Calendar.getInstance();
+        startOfToday.set(Calendar.HOUR_OF_DAY, 0);
+        startOfToday.set(Calendar.MINUTE, 0);
+        startOfToday.set(Calendar.SECOND, 0);
+        startOfToday.set(Calendar.MILLISECOND, 0);
+        long sevenDaysAgo = System.currentTimeMillis() - (7L * 24L * 60L * 60L * 1000L);
+
+        try {
+            List<HomeNetDatabase.UsageSummary> summaries = database.getUsageSummaries(
+                    startOfToday.getTimeInMillis(),
+                    sevenDaysAgo
+            );
+            StringBuilder result = new StringBuilder("ملخص الاستهلاك المحفوظ\n\n");
+            for (int i = 0; i < summaries.size(); i++) {
+                HomeNetDatabase.UsageSummary summary = summaries.get(i);
+                result.append(i + 1).append(") ").append(summary.latestIp).append("\n")
+                        .append("MAC: ").append(summary.mac).append("\n")
+                        .append("اليوم: ").append(formatBytes(summary.todayBytes)).append("\n")
+                        .append("آخر 7 أيام: ").append(formatBytes(summary.sevenDayBytes)).append("\n")
+                        .append("منذ بداية التسجيل: ").append(formatBytes(summary.totalBytes)).append("\n")
+                        .append("عدد اللقطات: ").append(summary.snapshotCount).append("\n")
+                        .append("آخر لقطة: ").append(formatTimestamp(summary.lastCapturedAt)).append("\n\n");
+            }
+            if (summaries.isEmpty()) result.append("لا توجد قراءات محفوظة بعد.");
+            output.setText(result.toString().trim());
+            status.setText("تم حساب الملخص من قاعدة البيانات المحلية.");
+        } catch (Exception e) {
+            output.setText("فشل قراءة ملخص الاستهلاك:\n" + e.getMessage());
+            status.setText("حدث خطأ أثناء قراءة التاريخ المحفوظ.");
+        }
     }
 
     private void readDevices() {
