@@ -127,7 +127,11 @@ export function HomeNetDashboard() {
     setNotice(null);
     const result = authMode === "login"
       ? await supabase.auth.signInWithPassword({ email, password })
-      : await supabase.auth.signUp({ email, password });
+      : await supabase.auth.signUp({
+          email,
+          password,
+          options: { emailRedirectTo: window.location.origin },
+        });
     setLoading(false);
     if (result.error) {
       setNotice({ kind: "error", text: result.error.message });
