@@ -51,7 +51,7 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.2.3");
+        title.setText("HomeNet Agent v0.2.4");
         title.setTextSize(22);
         root.addView(title);
 
@@ -212,7 +212,8 @@ public class WebViewBridgeActivity extends Activity {
                 "function norm(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');}" +
                 "function clickText(w,target){try{" +
                 "var links=w.document.getElementsByTagName('a');" +
-                "for(var i=0;i<links.length;i++){if(norm(links[i].innerText||links[i].textContent)===target){links[i].click();return true;}}" +
+                "for(var i=0;i<links.length;i++){var n=norm(links[i].innerText||links[i].textContent);" +
+                "if(n===target||(target==='dhcpclients'&&n.indexOf('dhcpclients')===0)){links[i].click();return true;}}" +
                 "for(var j=0;j<w.frames.length;j++){if(clickText(w.frames[j],target))return true;}" +
                 "}catch(e){}return false;}" +
                 "if(clickText(window,'dhcpclients'))return 'target';" +
