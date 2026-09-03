@@ -30,22 +30,24 @@ public class WebViewBridgeActivity extends Activity {
     private TextView output;
     private final String routerBase = "http://192.168.0.1";
     private final List<DeviceSnapshot> latestSnapshots = new ArrayList<>();
+    private HomeNetDatabase database;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        database = new HomeNetDatabase(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(10), dp(10), dp(10), dp(10));
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.1.6");
+        title.setText("HomeNet Agent v0.1.7");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("سجّل الدخول، ثم افتح System Tools > Statistics يدويًا. زر قراءة الأجهزة يستخرج IP وMAC وعدادات Total/Current من الـ frames بدون تغيير الرابط.");
+        help.setText("افتح System Tools > Statistics ثم اضغط قراءة الأجهزة. كل قراءة تُحفظ على الهاتف، ويُحسب الاستهلاك من فرق Total Bytes عن القراءة السابقة.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -140,10 +142,20 @@ public class WebViewBridgeActivity extends Activity {
                             capturedAt
                     );
                     latestSnapshots.add(snapshot);
+                    HomeNetDatabase.SaveResult saved = database.saveSnapshot(
+                            snapshot.ip,
+                            snapshot.mac,
+                            snapshot.timestamp,
+                            snapshot.packetsTotal,
+                            snapshot.bytesTotal,
+                            snapshot.packetsCurrent,
+                            snapshot.bytesCurrent
+                    );
                     result.append(i + 1).append(") ").append(snapshot.ip).append("\n")
                             .append("MAC: ").append(snapshot.mac).append("\n")
                             .append("Total Bytes: ").append(String.format(Locale.US, "%,d", snapshot.bytesTotal))
                             .append(" (").append(formatBytes(snapshot.bytesTotal)).append(")\n")
+                            .append(usageSincePrevious(saved)).append("\n")
                             .append("Current Bytes: ").append(String.format(Locale.US, "%,d", snapshot.bytesCurrent)).append("/s\n")
                             .append("Packets: ").append(String.format(Locale.US, "%,d", snapshot.packetsTotal))
                             .append(" total | ").append(String.format(Locale.US, "%,d", snapshot.packetsCurrent)).append(" current\n\n");
@@ -151,7 +163,7 @@ public class WebViewBridgeActivity extends Activity {
                 output.setText(result.toString().trim());
                 status.setText(devices.length() == 0
                         ? "لم أجد صفوف أجهزة. افتح Statistics أولًا ثم أعد القراءة."
-                        : "تم تحويل جدول Statistics إلى DeviceSnapshot بنجاح.");
+                        : "تم حفظ اللقطة محليًا وحساب الفرق عن القراءة السابقة.");
             } catch (Exception e) {
                 output.setText("فشل تحليل نتيجة Statistics:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
                 status.setText("حدث خطأ أثناء تحليل الجدول.");
@@ -219,6 +231,13 @@ public class WebViewBridgeActivity extends Activity {
         return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(timestamp));
     }
 
+    private String usageSincePrevious(HomeNetDatabase.SaveResult saved) {
+        if (saved.firstSnapshot) return "Usage Delta: أول قراءة محفوظة";
+        if (saved.counterReset) return "Usage Delta: 0 B (بداية جلسة جديدة بعد تصفير العداد)";
+        return "Usage Delta: " + String.format(Locale.US, "%,d", saved.deltaBytes) +
+                " bytes (" + formatBytes(saved.deltaBytes) + ")";
+    }
+
     private static class DeviceSnapshot {
         final String ip;
         final String mac;
@@ -241,5 +260,6 @@ public class WebViewBridgeActivity extends Activity {
     }
 
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
+    @Override protected void onDestroy(){if(database!=null)database.close();super.onDestroy();}
     @Override public void onBackPressed(){if(web!=null&&web.canGoBack())web.goBack();else super.onBackPressed();}
 }
