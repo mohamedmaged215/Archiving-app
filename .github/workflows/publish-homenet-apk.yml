@@ -50,7 +50,8 @@ jobs:
         run: gradle :app:assembleRelease --stacktrace
 
       - name: Verify APK signature
-        run: "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs homenet-agent/app/build/outputs/apk/release/app-release.apk
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs homenet-agent/app/build/outputs/apk/release/app-release.apk
 
       - name: Publish APK in repository
         run: |
