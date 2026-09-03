@@ -2,6 +2,7 @@ package com.homenet.agent;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.text.method.ScrollingMovementMethod;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -13,13 +14,22 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.json.JSONTokener;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
 
 public class WebViewBridgeActivity extends Activity {
     private WebView web;
     private TextView status;
     private TextView output;
     private final String routerBase = "http://192.168.0.1";
+    private final List<DeviceSnapshot> latestSnapshots = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -30,12 +40,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.1.5");
+        title.setText("HomeNet Agent v0.1.6");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("سجّل الدخول من واجهة TP-Link، ثم افتح System Tools > Statistics يدويًا داخلها. زر القراءة لا يغيّر الرابط؛ يقرأ الصفحة الحالية وكل الـ frames.");
+        help.setText("سجّل الدخول، ثم افتح System Tools > Statistics يدويًا. زر قراءة الأجهزة يستخرج IP وMAC وعدادات Total/Current من الـ frames بدون تغيير الرابط.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -44,10 +54,14 @@ public class WebViewBridgeActivity extends Activity {
         Button openRouter = new Button(this);
         openRouter.setText("فتح الراوتر");
         buttons.addView(openRouter, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button readCurrent = new Button(this);
-        readCurrent.setText("اقرأ الصفحة الحالية");
-        buttons.addView(readCurrent, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button readDevices = new Button(this);
+        readDevices.setText("قراءة الأجهزة");
+        buttons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(buttons);
+
+        Button diagnostics = new Button(this);
+        diagnostics.setText("تشخيص الصفحة والـ frames");
+        root.addView(diagnostics, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         status = new TextView(this);
         status.setText("افتح الراوتر وسجّل الدخول أولاً.");
@@ -76,12 +90,73 @@ public class WebViewBridgeActivity extends Activity {
         output.setText("ستظهر نتيجة القراءة هنا.");
         output.setTextSize(12);
         output.setTextIsSelectable(true);
-        root.addView(output, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(170)));
+        output.setMovementMethod(new ScrollingMovementMethod());
+        root.addView(output, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(210)));
 
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
-        readCurrent.setOnClickListener(v -> readCurrentPage());
+        readDevices.setOnClickListener(v -> readDevices());
+        diagnostics.setOnClickListener(v -> readCurrentPage());
         setContentView(root);
         web.loadUrl(routerBase);
+    }
+
+    private void readDevices() {
+        status.setText("جاري استخراج الأجهزة من جدول Statistics…");
+        String js = "(function(){" +
+                "var devices=[],seen={};" +
+                "function scan(w){try{" +
+                "var d=w.document;var trs=d.querySelectorAll('tr');" +
+                "for(var i=0;i<trs.length;i++){" +
+                "var row=(trs[i].innerText||trs[i].textContent||'').replace(/\\s+/g,' ').trim();" +
+                "var ipm=row.match(/(?:\\d{1,3}\\.){3}\\d{1,3}/);" +
+                "var macm=row.match(/(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}/);" +
+                "if(!ipm||!macm)continue;" +
+                "var after=row.substring(row.indexOf(macm[0])+macm[0].length);" +
+                "var nums=after.match(/\\d[\\d,]*/g)||[];if(nums.length<4)continue;" +
+                "var key=ipm[0]+'|'+macm[0].toUpperCase();if(seen[key])continue;seen[key]=true;" +
+                "devices.push({ip:ipm[0],mac:macm[0].toUpperCase(),packets_total:nums[0],bytes_total:nums[1],packets_current:nums[2],bytes_current:nums[3]});" +
+                "}" +
+                "for(var j=0;j<w.frames.length;j++)scan(w.frames[j]);" +
+                "}catch(e){}}" +
+                "scan(window);return JSON.stringify(devices);" +
+                "})()";
+        web.evaluateJavascript(js, value -> {
+            try {
+                JSONArray devices = new JSONArray(decodeJs(value));
+                latestSnapshots.clear();
+                long capturedAt = System.currentTimeMillis();
+                StringBuilder result = new StringBuilder();
+                result.append("تم العثور على ").append(devices.length()).append(" جهاز\n");
+                result.append("وقت اللقطة: ").append(formatTimestamp(capturedAt)).append("\n\n");
+                for (int i = 0; i < devices.length(); i++) {
+                    JSONObject device = devices.getJSONObject(i);
+                    DeviceSnapshot snapshot = new DeviceSnapshot(
+                            device.getString("ip"),
+                            device.getString("mac"),
+                            parseCounter(device.getString("packets_total")),
+                            parseCounter(device.getString("bytes_total")),
+                            parseCounter(device.getString("packets_current")),
+                            parseCounter(device.getString("bytes_current")),
+                            capturedAt
+                    );
+                    latestSnapshots.add(snapshot);
+                    result.append(i + 1).append(") ").append(snapshot.ip).append("\n")
+                            .append("MAC: ").append(snapshot.mac).append("\n")
+                            .append("Total Bytes: ").append(String.format(Locale.US, "%,d", snapshot.bytesTotal))
+                            .append(" (").append(formatBytes(snapshot.bytesTotal)).append(")\n")
+                            .append("Current Bytes: ").append(String.format(Locale.US, "%,d", snapshot.bytesCurrent)).append("/s\n")
+                            .append("Packets: ").append(String.format(Locale.US, "%,d", snapshot.packetsTotal))
+                            .append(" total | ").append(String.format(Locale.US, "%,d", snapshot.packetsCurrent)).append(" current\n\n");
+                }
+                output.setText(result.toString().trim());
+                status.setText(devices.length() == 0
+                        ? "لم أجد صفوف أجهزة. افتح Statistics أولًا ثم أعد القراءة."
+                        : "تم تحويل جدول Statistics إلى DeviceSnapshot بنجاح.");
+            } catch (Exception e) {
+                output.setText("فشل تحليل نتيجة Statistics:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
+                status.setText("حدث خطأ أثناء تحليل الجدول.");
+            }
+        });
     }
 
     private void readCurrentPage() {
@@ -126,6 +201,42 @@ public class WebViewBridgeActivity extends Activity {
             return decoded == null ? "" : String.valueOf(decoded);
         } catch (Exception ignored) {
             return value;
+        }
+    }
+
+    private long parseCounter(String value) {
+        return Long.parseLong(value.replace(",", "").trim());
+    }
+
+    private String formatBytes(long bytes) {
+        if (bytes >= 1024L * 1024L * 1024L) return String.format(Locale.US, "%.3f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        if (bytes >= 1024L * 1024L) return String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0));
+        if (bytes >= 1024L) return String.format(Locale.US, "%.2f KB", bytes / 1024.0);
+        return bytes + " B";
+    }
+
+    private String formatTimestamp(long timestamp) {
+        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date(timestamp));
+    }
+
+    private static class DeviceSnapshot {
+        final String ip;
+        final String mac;
+        final long packetsTotal;
+        final long bytesTotal;
+        final long packetsCurrent;
+        final long bytesCurrent;
+        final long timestamp;
+
+        DeviceSnapshot(String ip, String mac, long packetsTotal, long bytesTotal,
+                       long packetsCurrent, long bytesCurrent, long timestamp) {
+            this.ip = ip;
+            this.mac = mac;
+            this.packetsTotal = packetsTotal;
+            this.bytesTotal = bytesTotal;
+            this.packetsCurrent = packetsCurrent;
+            this.bytesCurrent = bytesCurrent;
+            this.timestamp = timestamp;
         }
     }
 
