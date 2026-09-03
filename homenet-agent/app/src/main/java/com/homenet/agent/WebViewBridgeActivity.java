@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.method.ScrollingMovementMethod;
+import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -13,6 +14,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -39,11 +41,19 @@ public class WebViewBridgeActivity extends Activity {
     private Button autoCaptureButton;
     private boolean autoCaptureEnabled;
     private boolean readInProgress;
+    private boolean cloudSyncInProgress;
+    private CloudSyncManager cloudSync;
+    private EditText cloudEmail;
+    private EditText cloudPassword;
+    private Button cloudLoginButton;
+    private Button cloudSyncButton;
+    private TextView cloudState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         database = new HomeNetDatabase(this);
+        cloudSync = new CloudSyncManager(this);
         autoCaptureHandler = new Handler(Looper.getMainLooper());
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -51,12 +61,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.2.4");
+        title.setText("HomeNet Agent v0.3.0");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("سجّل الدخول مرة، ثم حدّث أسماء الأجهزة من DHCP Clients. تُحفظ الأسماء وتظهر مع قراءات Statistics.");
+        help.setText("اربط نفس حساب لوحة HomeNet مرة واحدة، ثم سجّل دخول الراوتر. القراءات تُحفظ محليًا وتُرفع عند توفر الإنترنت.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -87,6 +97,39 @@ public class WebViewBridgeActivity extends Activity {
         Button usageSummary = new Button(this);
         usageSummary.setText("ملخص الاستهلاك");
         root.addView(usageSummary, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        cloudEmail = new EditText(this);
+        cloudEmail.setHint("بريد حساب HomeNet");
+        cloudEmail.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        cloudEmail.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        root.addView(cloudEmail, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        cloudPassword = new EditText(this);
+        cloudPassword.setHint("كلمة مرور HomeNet");
+        cloudPassword.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        cloudPassword.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        root.addView(cloudPassword, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        if (cloudSync.hasSession()) {
+            cloudEmail.setVisibility(View.GONE);
+            cloudPassword.setVisibility(View.GONE);
+        }
+
+        LinearLayout cloudButtons = new LinearLayout(this);
+        cloudButtons.setOrientation(LinearLayout.HORIZONTAL);
+        cloudLoginButton = new Button(this);
+        cloudLoginButton.setText(cloudSync.hasSession() ? "فصل الحساب" : "ربط الحساب");
+        cloudButtons.addView(cloudLoginButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        cloudSyncButton = new Button(this);
+        cloudSyncButton.setText("مزامنة السحابة");
+        cloudButtons.addView(cloudSyncButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        root.addView(cloudButtons);
+
+        cloudState = new TextView(this);
+        cloudState.setText(cloudSync.hasSession()
+                ? "الحساب مربوط. سيتم رفع أي قراءات مؤجلة تلقائيًا."
+                : "أنشئ حسابًا من homenet-control.vercel.app ثم اربطه هنا.");
+        cloudState.setTextSize(12);
+        root.addView(cloudState);
 
         status = new TextView(this);
         status.setText("افتح الراوتر وسجّل الدخول أولاً.");
@@ -124,8 +167,54 @@ public class WebViewBridgeActivity extends Activity {
         readDeviceNames.setOnClickListener(v -> openDhcpClientsAndReadNames(0));
         usageSummary.setOnClickListener(v -> showUsageSummary());
         autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
+        cloudLoginButton.setOnClickListener(v -> handleCloudLogin());
+        cloudSyncButton.setOnClickListener(v -> syncCloud(true));
         setContentView(root);
         web.loadUrl(routerBase);
+        if (cloudSync.hasSession()) syncCloud(false);
+    }
+
+    private void handleCloudLogin() {
+        if (cloudSync.hasSession()) {
+            cloudSync.logout((success, message) -> {
+                cloudLoginButton.setText("ربط الحساب");
+                cloudEmail.setVisibility(View.VISIBLE);
+                cloudPassword.setVisibility(View.VISIBLE);
+                cloudState.setText(message);
+            });
+            return;
+        }
+        String email = cloudEmail.getText().toString().trim();
+        String password = cloudPassword.getText().toString();
+        if (email.isEmpty() || password.isEmpty()) {
+            cloudState.setText("اكتب بريد وكلمة مرور حساب HomeNet.");
+            return;
+        }
+        cloudLoginButton.setEnabled(false);
+        cloudState.setText("جاري ربط الهاتف بالحساب…");
+        cloudSync.login(email, password, (success, message) -> {
+            cloudLoginButton.setEnabled(true);
+            cloudState.setText(message);
+            if (success) {
+                cloudLoginButton.setText("فصل الحساب");
+                cloudPassword.setText("");
+                cloudEmail.setVisibility(View.GONE);
+                cloudPassword.setVisibility(View.GONE);
+                syncCloud(false);
+            }
+        });
+    }
+
+    private void syncCloud(boolean announce) {
+        if (cloudSyncInProgress) return;
+        cloudSyncInProgress = true;
+        cloudSyncButton.setEnabled(false);
+        if (announce) cloudState.setText("جاري رفع القراءات المحفوظة…");
+        cloudSync.sync(database, (success, message) -> {
+            cloudSyncInProgress = false;
+            cloudSyncButton.setEnabled(true);
+            cloudState.setText(message);
+        });
     }
 
     private void showUsageSummary() {
@@ -280,6 +369,7 @@ public class WebViewBridgeActivity extends Activity {
                 if (devices.length() == 0) result.append("لم أجد أجهزة في جدول DHCP Clients.");
                 output.setText(result.toString().trim());
                 status.setText("تم حفظ " + devices.length() + " جهاز، منها " + namedCount + " باسم ظاهر من الراوتر.");
+                if (cloudSync.hasSession()) syncCloud(false);
             } catch (Exception e) {
                 output.setText("فشل تحليل DHCP Clients:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
                 status.setText("حدث خطأ أثناء قراءة أسماء الأجهزة.");
@@ -366,6 +456,7 @@ public class WebViewBridgeActivity extends Activity {
                         ? "لم أجد صفوف أجهزة. افتح Statistics أولًا ثم أعد القراءة."
                         : "تم حفظ اللقطة محليًا وحساب الفرق عن القراءة السابقة." +
                                 (automatic ? " القراءة التالية خلال 60 ثانية." : ""));
+                if (devices.length() > 0 && cloudSync.hasSession()) syncCloud(false);
             } catch (Exception e) {
                 output.setText("فشل تحليل نتيجة Statistics:\n" + e.getMessage() + "\n\nRaw:\n" + decodeJs(value));
                 status.setText("حدث خطأ أثناء تحليل الجدول.");
@@ -472,6 +563,7 @@ public class WebViewBridgeActivity extends Activity {
     @Override protected void onDestroy(){
         autoCaptureEnabled=false;
         if(autoCaptureHandler!=null)autoCaptureHandler.removeCallbacksAndMessages(null);
+        if(cloudSync!=null)cloudSync.close();
         if(database!=null)database.close();
         super.onDestroy();
     }

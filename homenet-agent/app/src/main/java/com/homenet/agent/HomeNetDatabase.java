@@ -11,7 +11,7 @@ import java.util.List;
 
 final class HomeNetDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "homenet.db";
-    private static final int DATABASE_VERSION = 2;
+    private static final int DATABASE_VERSION = 3;
 
     HomeNetDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -29,16 +29,24 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
                 "packets_current INTEGER NOT NULL," +
                 "bytes_current INTEGER NOT NULL," +
                 "delta_bytes INTEGER NOT NULL," +
-                "counter_reset INTEGER NOT NULL DEFAULT 0" +
+                "counter_reset INTEGER NOT NULL DEFAULT 0," +
+                "cloud_synced INTEGER NOT NULL DEFAULT 0" +
                 ")");
         db.execSQL("CREATE INDEX idx_traffic_snapshots_mac_time " +
                 "ON traffic_snapshots(mac, captured_at DESC, id DESC)");
+        db.execSQL("CREATE INDEX idx_traffic_snapshots_cloud_pending " +
+                "ON traffic_snapshots(cloud_synced, captured_at, id)");
         createDeviceProfilesTable(db);
     }
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) createDeviceProfilesTable(db);
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE traffic_snapshots ADD COLUMN cloud_synced INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_traffic_snapshots_cloud_pending " +
+                    "ON traffic_snapshots(cloud_synced, captured_at, id)");
+        }
     }
 
     private void createDeviceProfilesTable(SQLiteDatabase db) {
@@ -132,6 +140,38 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
         return "";
     }
 
+    List<TrafficSnapshot> getUnsyncedSnapshots(int limit) {
+        List<TrafficSnapshot> snapshots = new ArrayList<>();
+        String sql = "SELECT s.id,s.ip,s.mac,s.captured_at,s.packets_total,s.bytes_total," +
+                "s.packets_current,s.bytes_current,s.delta_bytes,s.counter_reset," +
+                "COALESCE(p.device_name, '') " +
+                "FROM traffic_snapshots s LEFT JOIN device_profiles p ON p.mac = s.mac " +
+                "WHERE s.cloud_synced = 0 ORDER BY s.captured_at,s.id LIMIT ?";
+        try (Cursor cursor = getReadableDatabase().rawQuery(sql, new String[]{String.valueOf(limit)})) {
+            while (cursor.moveToNext()) {
+                snapshots.add(new TrafficSnapshot(
+                        cursor.getLong(0), cursor.getString(1), cursor.getString(2), cursor.getLong(3),
+                        cursor.getLong(4), cursor.getLong(5), cursor.getLong(6), cursor.getLong(7),
+                        cursor.getLong(8), cursor.getInt(9) == 1, cursor.getString(10)
+                ));
+            }
+        }
+        return snapshots;
+    }
+
+    void markSnapshotSynced(long snapshotId) {
+        ContentValues values = new ContentValues();
+        values.put("cloud_synced", 1);
+        getWritableDatabase().update("traffic_snapshots", values, "id = ?", new String[]{String.valueOf(snapshotId)});
+    }
+
+    int countUnsyncedSnapshots() {
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT COUNT(*) FROM traffic_snapshots WHERE cloud_synced = 0", null)) {
+            return cursor.moveToFirst() ? cursor.getInt(0) : 0;
+        }
+    }
+
     List<UsageSummary> getUsageSummaries(long todayStartedAt, long sevenDaysAgo) {
         SQLiteDatabase db = getReadableDatabase();
         List<UsageSummary> summaries = new ArrayList<>();
@@ -200,6 +240,36 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
             this.totalBytes = totalBytes;
             this.snapshotCount = snapshotCount;
             this.lastCapturedAt = lastCapturedAt;
+        }
+    }
+
+    static final class TrafficSnapshot {
+        final long id;
+        final String ip;
+        final String mac;
+        final long capturedAt;
+        final long packetsTotal;
+        final long bytesTotal;
+        final long packetsCurrent;
+        final long bytesCurrent;
+        final long deltaBytes;
+        final boolean counterReset;
+        final String deviceName;
+
+        TrafficSnapshot(long id, String ip, String mac, long capturedAt, long packetsTotal, long bytesTotal,
+                        long packetsCurrent, long bytesCurrent, long deltaBytes, boolean counterReset,
+                        String deviceName) {
+            this.id = id;
+            this.ip = ip;
+            this.mac = mac;
+            this.capturedAt = capturedAt;
+            this.packetsTotal = packetsTotal;
+            this.bytesTotal = bytesTotal;
+            this.packetsCurrent = packetsCurrent;
+            this.bytesCurrent = bytesCurrent;
+            this.deltaBytes = deltaBytes;
+            this.counterReset = counterReset;
+            this.deviceName = deviceName;
         }
     }
 }
