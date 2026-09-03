@@ -51,12 +51,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.2.1");
+        title.setText("HomeNet Agent v0.2.2");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("افتح System Tools > Statistics ثم اضغط قراءة الأجهزة. كل قراءة تُحفظ على الهاتف، ويُحسب الاستهلاك من فرق Total Bytes عن القراءة السابقة.");
+        help.setText("سجّل الدخول مرة، ثم استخدم فتح Statistics آليًا. التطبيق يضغط عنصر القائمة الأصلي داخل الـ frame دون تركيب URL.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -65,20 +65,24 @@ public class WebViewBridgeActivity extends Activity {
         Button openRouter = new Button(this);
         openRouter.setText("فتح الراوتر");
         buttons.addView(openRouter, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-        Button readDevices = new Button(this);
-        readDevices.setText("قراءة الأجهزة");
-        buttons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button openStatistics = new Button(this);
+        openStatistics.setText("فتح Statistics آليًا");
+        buttons.addView(openStatistics, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(buttons);
 
         LinearLayout secondaryButtons = new LinearLayout(this);
         secondaryButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button usageSummary = new Button(this);
-        usageSummary.setText("ملخص الاستهلاك");
-        secondaryButtons.addView(usageSummary, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        Button readDevices = new Button(this);
+        readDevices.setText("قراءة الأجهزة");
+        secondaryButtons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         autoCaptureButton = new Button(this);
         autoCaptureButton.setText("تشغيل القراءة التلقائية");
         secondaryButtons.addView(autoCaptureButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(secondaryButtons);
+
+        Button usageSummary = new Button(this);
+        usageSummary.setText("ملخص الاستهلاك");
+        root.addView(usageSummary, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         status = new TextView(this);
         status.setText("افتح الراوتر وسجّل الدخول أولاً.");
@@ -111,6 +115,7 @@ public class WebViewBridgeActivity extends Activity {
         root.addView(output, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(210)));
 
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
+        openStatistics.setOnClickListener(v -> clickStatisticsMenu(null));
         readDevices.setOnClickListener(v -> readDevices(false));
         usageSummary.setOnClickListener(v -> showUsageSummary());
         autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
@@ -156,12 +161,40 @@ public class WebViewBridgeActivity extends Activity {
         autoCaptureHandler.removeCallbacksAndMessages(null);
         if (autoCaptureEnabled) {
             autoCaptureButton.setText("إيقاف القراءة التلقائية");
-            status.setText("بدأت القراءة التلقائية كل 60 ثانية.");
-            readDevices(true);
+            status.setText("جاري فتح Statistics ثم بدء القراءة التلقائية…");
+            clickStatisticsMenu(() -> readDevices(true));
         } else {
             autoCaptureButton.setText("تشغيل القراءة التلقائية");
             status.setText("تم إيقاف القراءة التلقائية.");
         }
+    }
+
+    private void clickStatisticsMenu(Runnable afterOpen) {
+        status.setText("أبحث عن عنصر Statistics الأصلي داخل الـ frames…");
+        String js = "(function(){" +
+                "function findAndClick(w){try{" +
+                "var links=w.document.getElementsByTagName('a');" +
+                "for(var i=0;i<links.length;i++){" +
+                "var text=(links[i].innerText||links[i].textContent||'').toLowerCase().replace(/[^a-z]/g,'');" +
+                "if(text==='statistics'){links[i].click();return true;}" +
+                "}" +
+                "for(var j=0;j<w.frames.length;j++){if(findAndClick(w.frames[j]))return true;}" +
+                "}catch(e){}return false;}" +
+                "return findAndClick(window);" +
+                "})()";
+        web.evaluateJavascript(js, value -> {
+            boolean found = "true".equalsIgnoreCase(decodeJs(value));
+            if (found) {
+                status.setText("تم الضغط على Statistics من القائمة الأصلية.");
+                if (afterOpen != null && autoCaptureEnabled) autoCaptureHandler.postDelayed(afterOpen, 2_500L);
+            } else {
+                status.setText("لم أجد Statistics. تأكد من تسجيل الدخول وظهور قائمة الراوتر.");
+                if (autoCaptureEnabled) {
+                    autoCaptureEnabled = false;
+                    autoCaptureButton.setText("تشغيل القراءة التلقائية");
+                }
+            }
+        });
     }
 
     private void scheduleNextAutomaticCapture(long delayMs) {
