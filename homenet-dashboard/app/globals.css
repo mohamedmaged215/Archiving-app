@@ -119,6 +119,7 @@ button:not(:disabled):hover { transform: translateY(-1px); }
 .status-pill { border-radius: 999px; padding: 6px 9px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
 .status-pill.online { color: #087451; background: #e6f8f1; }
 .status-pill.offline { color: #728096; background: #eef2f6; }
+.status-pill.approval { color: #9a4b05; background: #fff0d9; }
 .usage-line { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin: 22px 0 10px; }
 .usage-line > div { display: grid; gap: 3px; }
 .usage-line div span, .usage-line > span { color: var(--muted); font-size: .76rem; }
@@ -128,6 +129,7 @@ button:not(:disabled):hover { transform: translateY(-1px); }
 .device-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .device-actions button { width: 100%; }
 .control-hint { margin: 9px 2px 0; color: var(--warning); font-size: .73rem; line-height: 1.55; }
+.approval-hint { margin: 9px 2px 0; color: #9a4b05; font-size: .76rem; font-weight: 700; line-height: 1.55; }
 .control-details { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 .control-details h4 { margin: 0 0 11px; font-size: .9rem; }
 .control-details h4:not(:first-child) { margin-top: 20px; }

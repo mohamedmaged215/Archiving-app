@@ -90,14 +90,14 @@ export function HomeNetDashboard() {
   const loadDashboard = useCallback(async () => {
     if (!session) return;
     if (!hasLoadedDashboard.current) setLoading(true);
-    const { data: homeRow, error: homeError } = await supabase.from("homenet_homes").select("id,name,router_model,usage_started_at").limit(1).maybeSingle();
+    const { data: homeRow, error: homeError } = await supabase.from("homenet_homes").select("id,name,router_model,usage_started_at,block_new_devices").limit(1).maybeSingle();
     if (homeError) { setNotice({ kind: "error", text: `تعذر تحميل المنزل: ${homeError.message}` }); setLoading(false); return; }
     if (!homeRow) { setHome(null); setDevices([]); setCommands([]); hasLoadedDashboard.current = true; setLoading(false); return; }
 
     setHome(homeRow as Home);
     const [agentResult, devicesResult, addressesResult, totalsResult, schedulesResult, commandsResult] = await Promise.all([
       supabase.from("homenet_agents").select("id,app_version,last_seen_at").eq("home_id", homeRow.id).order("last_seen_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("homenet_devices").select("id,router_name,custom_name,current_ip,is_online,internet_enabled,quota_bytes,quota_period,speed_limit_kbps,last_seen_at").eq("home_id", homeRow.id).order("current_ip", { ascending: true }),
+      supabase.from("homenet_devices").select("id,router_name,custom_name,current_ip,is_online,internet_enabled,is_approved,quota_bytes,quota_period,speed_limit_kbps,last_seen_at").eq("home_id", homeRow.id).order("current_ip", { ascending: true }),
       supabase.from("homenet_device_addresses").select("device_id,mac").eq("home_id", homeRow.id),
       supabase.rpc("homenet_usage_totals", { p_home_id: homeRow.id, p_from: usageRange.from, p_to: usageRange.to, p_device_id: null }),
       supabase.from("homenet_schedules").select("id,device_id,block_from,block_until,days_of_week,enabled").eq("home_id", homeRow.id).eq("enabled", true).order("updated_at", { ascending: false }),
@@ -151,6 +151,7 @@ export function HomeNetDashboard() {
 
   const totalUsage = useMemo(() => devices.reduce((sum, device) => sum + device.used_bytes, 0), [devices]);
   const pendingCount = commands.filter((command) => command.status === "pending" || command.status === "processing").length;
+  const approvalPendingCount = devices.filter((device) => !device.is_approved).length;
   const internetControlAvailable = isRecentlySeen(agent?.last_seen_at ?? null) && supportsInternetControl(agent?.app_version ?? null);
   const realResetAvailable = supportsRealReset(agent?.app_version ?? null);
 
@@ -178,7 +179,31 @@ export function HomeNetDashboard() {
     setNotice({ kind: "ok", text: "تم حفظ الأمر، وسيُنفّذ عند اتصال الهاتف والراوتر." }); await loadDashboard(); return true;
   }
 
-  async function queueInternet(device: Device) { setBusyId(device.id); await queueCommand("set_internet", device.id, { enabled: !device.internet_enabled }); setBusyId(null); }
+  async function queueInternet(device: Device) {
+    if (!home) return;
+    setBusyId(device.id);
+    const nextEnabled = !device.internet_enabled;
+    if (nextEnabled && !device.is_approved) {
+      const approvalResult = await supabase.from("homenet_devices")
+        .update({ is_approved: true, updated_at: new Date().toISOString() })
+        .eq("id", device.id)
+        .eq("home_id", home.id);
+      if (approvalResult.error) {
+        setNotice({ kind: "error", text: `تعذر اعتماد الجهاز: ${approvalResult.error.message}` });
+        setBusyId(null);
+        return;
+      }
+      await supabase.from("homenet_commands")
+        .update({ status: "cancelled", updated_at: new Date().toISOString() })
+        .eq("home_id", home.id)
+        .eq("device_id", device.id)
+        .eq("action", "set_internet")
+        .eq("status", "pending")
+        .contains("payload", { enabled: false });
+    }
+    await queueCommand("set_internet", device.id, { enabled: nextEnabled, approved: nextEnabled && !device.is_approved });
+    setBusyId(null);
+  }
 
   async function renameDevice(device: Device, name: string) {
     if (!home) return;
@@ -263,11 +288,11 @@ export function HomeNetDashboard() {
     <header className="topbar"><div className="brand"><span className="brand-mark">H</span><div><strong>HomeNet</strong><small>{home.name}</small></div></div><div className="header-actions"><button className="icon-button" aria-label="تحديث" disabled={loading} onClick={() => void loadDashboard()}>↻</button><button className="logout-button" onClick={() => void supabase.auth.signOut()}>خروج</button></div></header>
     <section className="hero-panel"><div><span className="eyebrow">نظرة سريعة</span><h1>شبكة المنزل</h1><p>{devices.length ? `تم العثور على ${devices.length} أجهزة محفوظة` : "بانتظار أول قراءة من الهاتف"}</p></div><div className={`agent-state ${isRecentlySeen(agent?.last_seen_at ?? null) ? "active" : "waiting"}`}><span className="pulse" /><div><strong>{isRecentlySeen(agent?.last_seen_at ?? null) ? "الهاتف يرفع قراءات" : "الهاتف لا يرفع الآن"}</strong><small>{relativeTime(agent?.last_seen_at ?? null)}</small></div></div></section>
     {notice && <div className={`notice ${notice.kind}`}>{notice.text}<button aria-label="إغلاق" onClick={() => setNotice(null)}>×</button></div>}
-    <section className="system-note"><span className="system-note-icon">i</span><div><strong>{internetControlAvailable ? "الفصل والتشغيل والجدولة جاهزة" : "التحكم ينتظر اتصال تطبيق الهاتف"}</strong><p>{internetControlAvailable ? "الهاتف ينفّذ الأوامر والجداول في الخلفية. إصدار v0.6.0 يضيف حماية الشاشة المغلقة والتصفير الحقيقي." : "ثبّت آخر نسخة، سجّل دخول الراوتر والحساب، ثم شغّل الخدمة."}</p></div></section>
+    <section className="system-note"><span className="system-note-icon">i</span><div><strong>{home.block_new_devices ? "حماية الضيوف مفعّلة" : internetControlAvailable ? "الفصل والتشغيل والجدولة جاهزة" : "التحكم ينتظر اتصال تطبيق الهاتف"}</strong><p>{home.block_new_devices ? `أي MAC جديد يُفصل تلقائيًا حتى توافق عليه من هنا${approvalPendingCount ? ` · لديك ${approvalPendingCount} بانتظار الموافقة` : ""}. تغيير IP وحده لا يؤثر.` : internetControlAvailable ? "الهاتف ينفّذ الأوامر والجداول في الخلفية. إصدار v0.6.0 يضيف حماية الشاشة المغلقة والتصفير الحقيقي." : "ثبّت آخر نسخة، سجّل دخول الراوتر والحساب، ثم شغّل الخدمة."}</p></div></section>
 
     <section className="usage-filter"><div><span className="eyebrow">فترة الاستهلاك</span><h2>اعرض المدة التي تهمك</h2></div><div className="range-buttons"><button className={usagePreset === "today" ? "active" : ""} onClick={() => setUsagePreset("today")}>اليوم</button><button className={usagePreset === "week" ? "active" : ""} onClick={() => setUsagePreset("week")}>7 أيام</button><button className={usagePreset === "month" ? "active" : ""} onClick={() => setUsagePreset("month")}>الشهر</button><button className={usagePreset === "custom" ? "active" : ""} onClick={() => setUsagePreset("custom")}>من تاريخ إلى تاريخ</button></div>{usagePreset === "custom" ? <div className="date-fields global"><label>من<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label><label>إلى<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label></div> : null}</section>
 
-    <section className="stats-grid"><article className="stat-card accent"><span>استهلاك {usageRange.label}</span><strong>{formatBytes(totalUsage)}</strong><small>من نقطة البداية الجديدة فقط</small></article><article className="stat-card"><span>الأجهزة المعروفة</span><strong>{devices.length}</strong><small>{devices.filter((device) => device.is_online).length} ظهرت خلال آخر 3 دقائق</small></article><article className="stat-card"><span>أوامر قيد التنفيذ</span><strong>{pendingCount}</strong><small>{internetControlAvailable ? "يستلمها الهاتف كل 12 ثانية" : "تنتظر اتصال وكيل التحكم"}</small></article><article className="stat-card"><span>آخر تحديث للوحة</span><strong className="small-value">{lastLoadedAt ? lastLoadedAt.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }) : "—"}</strong><small>تحديث تلقائي كل 30 ثانية</small></article></section>
+    <section className="stats-grid"><article className="stat-card accent"><span>استهلاك {usageRange.label}</span><strong>{formatBytes(totalUsage)}</strong><small>من نقطة البداية الجديدة فقط</small></article><article className="stat-card"><span>الأجهزة المعروفة</span><strong>{devices.length}</strong><small>{approvalPendingCount ? `${approvalPendingCount} تنتظر موافقتك` : `${devices.filter((device) => device.is_online).length} ظهرت خلال آخر 3 دقائق`}</small></article><article className="stat-card"><span>أوامر قيد التنفيذ</span><strong>{pendingCount}</strong><small>{internetControlAvailable ? "يستلمها الهاتف كل 12 ثانية" : "تنتظر اتصال وكيل التحكم"}</small></article><article className="stat-card"><span>آخر تحديث للوحة</span><strong className="small-value">{lastLoadedAt ? lastLoadedAt.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }) : "—"}</strong><small>تحديث تلقائي كل 30 ثانية</small></article></section>
 
     <section className="section-heading"><div><span className="eyebrow">الأجهزة</span><h2>أجهزة المنزل</h2><p className="muted">يمكنك تعديل أي اسم وفتح تفاصيل مستقلة لكل جهاز.</p></div><div className="toolbar"><button className="secondary-button" disabled={loading} onClick={() => void loadDashboard()}>تحديث اللوحة</button><button className="danger-outline" disabled={busyId === "reset"} onClick={() => void resetUsage()}>تصفير حقيقي لكل القراءات</button></div></section>
     {loading ? <div className="loader" aria-label="جارٍ تحديث البيانات" /> : devices.length ? <section className="devices-grid">{devices.map((device) => <DeviceCard key={device.id} device={device} busy={busyId === device.id} controlAvailable={internetControlAvailable} globalRange={usageRange} onQueueInternet={queueInternet} onRename={renameDevice} onSaveLimits={saveLimits} onSaveSchedule={saveSchedule} onDeleteSchedule={deleteSchedule} onLoadUsage={loadDeviceUsage} />)}</section> : <section className="empty-state"><div className="empty-icon">⌁</div><h3>في انتظار أول قراءة جديدة</h3><p>العداد بدأ من الصفر، وستظهر أول قراءة يرفعها الهاتف هنا تلقائيًا.</p></section>}

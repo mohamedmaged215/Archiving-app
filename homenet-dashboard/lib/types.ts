@@ -3,6 +3,7 @@ export type Home = {
   name: string;
   router_model: string;
   usage_started_at: string;
+  block_new_devices: boolean;
 };
 
 export type Agent = {
@@ -18,6 +19,7 @@ export type Device = {
   current_ip: string | null;
   is_online: boolean;
   internet_enabled: boolean;
+  is_approved: boolean;
   quota_bytes: number | null;
   quota_period: "daily" | "weekly" | "monthly" | "one_time";
   speed_limit_kbps: number | null;

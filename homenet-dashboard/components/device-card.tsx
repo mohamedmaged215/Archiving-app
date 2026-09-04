@@ -86,13 +86,14 @@ export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueu
           {editingName ? <div className="rename-row"><input aria-label="اسم الجهاز الجديد" autoFocus value={newName} onChange={(event) => setNewName(event.target.value)} /><button className="mini-button" disabled={busy || !newName.trim()} onClick={() => void onRename(device, newName).then(() => setEditingName(false))}>حفظ</button><button className="mini-button ghost" onClick={() => setEditingName(false)}>إلغاء</button></div> : <div className="name-row"><h3>{name}</h3><button className="edit-name" onClick={() => setEditingName(true)}>تعديل الاسم</button></div>}
           <p>{device.current_ip || "IP غير معروف"} · {device.mac_addresses[0] || "MAC غير معروف"}</p>
         </div>
-        <span className={`status-pill ${device.is_online ? "online" : "offline"}`}>{device.is_online ? "نشط الآن" : "غير نشط"}</span>
+        <span className={`status-pill ${!device.is_approved ? "approval" : device.is_online ? "online" : "offline"}`}>{!device.is_approved ? "بانتظار موافقتك" : device.is_online ? "نشط الآن" : "غير نشط"}</span>
       </div>
 
       <div className="usage-line"><div><span>استهلاك {globalRange.label}</span><strong>{bytesToText(device.used_bytes)}</strong></div><span>{quotaBytes ? `${bytesToText(device.quota_used_bytes)} من ${bytesToText(quotaBytes)} (${periodLabels[device.quota_period]})` : "لم تحدد باقة"}</span></div>
       <div className="progress" aria-label={`استهلاك ${percentage.toFixed(0)}%`}><span style={{ width: `${percentage}%` }} /></div>
 
-      <div className="device-actions"><button className={device.internet_enabled ? "danger-button" : "success-button"} disabled={busy || !controlAvailable} onClick={() => void onQueueInternet(device)}>{device.internet_enabled ? "فصل الإنترنت" : "تشغيل الإنترنت"}</button><button className="secondary-button" type="button" onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "إخفاء التفاصيل" : "التفاصيل والتحكم"}</button></div>
+      <div className="device-actions"><button className={device.internet_enabled ? "danger-button" : "success-button"} disabled={busy || !controlAvailable} onClick={() => void onQueueInternet(device)}>{!device.is_approved ? "السماح للضيف وتشغيل الإنترنت" : device.internet_enabled ? "فصل الإنترنت" : "تشغيل الإنترنت"}</button><button className="secondary-button" type="button" onClick={() => setDetailsOpen((open) => !open)}>{detailsOpen ? "إخفاء التفاصيل" : "التفاصيل والتحكم"}</button></div>
+      {!device.is_approved ? <p className="approval-hint">هذا عنوان جديد؛ الإنترنت محظور حتى تسمح له أنت.</p> : null}
       {!controlAvailable ? <p className="control-hint">يلزم تثبيت آخر نسخة وتشغيل خدمة HomeNet على الهاتف.</p> : null}
 
       {detailsOpen ? <section className="control-details" aria-label={`إعدادات ${name}`}>
