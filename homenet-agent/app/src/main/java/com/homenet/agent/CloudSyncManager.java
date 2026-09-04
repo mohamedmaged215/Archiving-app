@@ -37,6 +37,31 @@ final class CloudSyncManager {
         void onResult(boolean success, String message);
     }
 
+    interface CommandCallback {
+        void onResult(RouterCommand command, String message);
+    }
+
+    static final class RouterCommand {
+        final String id;
+        final String deviceId;
+        final String action;
+        final JSONObject payload;
+        final String deviceName;
+        final String ip;
+        final String mac;
+
+        RouterCommand(String id, String deviceId, String action, JSONObject payload,
+                      String deviceName, String ip, String mac) {
+            this.id = id;
+            this.deviceId = deviceId;
+            this.action = action;
+            this.payload = payload;
+            this.deviceName = deviceName;
+            this.ip = ip;
+            this.mac = mac;
+        }
+    }
+
     private final SharedPreferences preferences;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -140,7 +165,7 @@ final class CloudSyncManager {
         JSONObject values = new JSONObject();
         values.put("home_id", homeId);
         values.put("name", "هاتف المراقبة");
-        values.put("app_version", "0.3.1");
+        values.put("app_version", "0.4.0");
         values.put("last_seen_at", isoTimestamp(System.currentTimeMillis()));
 
         if (agentId == null || agentId.isEmpty()) {
@@ -222,6 +247,130 @@ final class CloudSyncManager {
                 "resolution=ignore-duplicates,return=minimal"
         );
         requireSuccess(uploaded, "تعذر رفع قراءة الاستهلاك");
+    }
+
+    void claimNextCommand(CommandCallback callback) {
+        if (!hasSession()) {
+            mainHandler.post(() -> callback.onResult(null, "اربط حساب HomeNet أولًا."));
+            return;
+        }
+        executor.execute(() -> {
+            try {
+                String homeId = ensureHome();
+                ensureAgentHeartbeat(homeId);
+                String due = encode(isoTimestamp(System.currentTimeMillis()));
+                HttpResult queue = authorizedRequest(
+                        "GET",
+                        "/rest/v1/homenet_commands?home_id=eq." + encode(homeId) +
+                                "&status=eq.pending&scheduled_for=lte." + due +
+                                "&select=id,device_id,action,payload,attempts&order=created_at.asc&limit=1",
+                        null,
+                        null
+                );
+                requireSuccess(queue, "تعذر قراءة طابور الأوامر");
+                JSONArray rows = new JSONArray(queue.body);
+                if (rows.length() == 0) {
+                    mainHandler.post(() -> callback.onResult(null, "لا توجد أوامر جديدة."));
+                    return;
+                }
+
+                JSONObject row = rows.getJSONObject(0);
+                String commandId = row.getString("id");
+                JSONObject claim = new JSONObject();
+                claim.put("status", "processing");
+                claim.put("claimed_at", isoTimestamp(System.currentTimeMillis()));
+                claim.put("updated_at", isoTimestamp(System.currentTimeMillis()));
+                claim.put("attempts", row.optInt("attempts", 0) + 1);
+                HttpResult claimed = authorizedRequest(
+                        "PATCH",
+                        "/rest/v1/homenet_commands?id=eq." + encode(commandId) +
+                                "&status=eq.pending&select=id",
+                        claim.toString(),
+                        "return=representation"
+                );
+                requireSuccess(claimed, "تعذر حجز الأمر");
+                if (new JSONArray(claimed.body).length() == 0) {
+                    mainHandler.post(() -> callback.onResult(null, "سبق تنفيذ الأمر من وكيل آخر."));
+                    return;
+                }
+
+                String deviceId = row.optString("device_id", "");
+                if (deviceId.isEmpty()) throw new IllegalStateException("الأمر لا يحتوي على جهاز");
+                HttpResult deviceResponse = authorizedRequest(
+                        "GET",
+                        "/rest/v1/homenet_devices?id=eq." + encode(deviceId) +
+                                "&select=router_name,custom_name,current_ip&limit=1",
+                        null,
+                        null
+                );
+                requireSuccess(deviceResponse, "تعذر قراءة بيانات الجهاز");
+                JSONArray devices = new JSONArray(deviceResponse.body);
+                if (devices.length() == 0) throw new IllegalStateException("الجهاز غير موجود في الحساب");
+                JSONObject device = devices.getJSONObject(0);
+
+                HttpResult addressResponse = authorizedRequest(
+                        "GET",
+                        "/rest/v1/homenet_device_addresses?device_id=eq." + encode(deviceId) +
+                                "&select=mac&order=last_seen_at.desc&limit=1",
+                        null,
+                        null
+                );
+                requireSuccess(addressResponse, "تعذر قراءة MAC الجهاز");
+                JSONArray addresses = new JSONArray(addressResponse.body);
+                if (addresses.length() == 0) throw new IllegalStateException("لا يوجد MAC محفوظ للجهاز");
+
+                String customName = device.optString("custom_name", "").trim();
+                String routerName = device.optString("router_name", "").trim();
+                RouterCommand command = new RouterCommand(
+                        commandId,
+                        deviceId,
+                        row.getString("action"),
+                        row.optJSONObject("payload") == null ? new JSONObject() : row.getJSONObject("payload"),
+                        customName.isEmpty() ? routerName : customName,
+                        device.optString("current_ip", ""),
+                        addresses.getJSONObject(0).getString("mac")
+                );
+                mainHandler.post(() -> callback.onResult(command, "تم استلام الأمر."));
+            } catch (Exception error) {
+                mainHandler.post(() -> callback.onResult(null, "تعذر استلام الأمر: " + safeMessage(error)));
+            }
+        });
+    }
+
+    void finishCommand(RouterCommand command, boolean success, String errorMessage, ResultCallback callback) {
+        executor.execute(() -> {
+            try {
+                if (success && "set_internet".equals(command.action)) {
+                    JSONObject deviceUpdate = new JSONObject();
+                    deviceUpdate.put("internet_enabled", command.payload.optBoolean("enabled", true));
+                    deviceUpdate.put("updated_at", isoTimestamp(System.currentTimeMillis()));
+                    HttpResult updatedDevice = authorizedRequest(
+                            "PATCH",
+                            "/rest/v1/homenet_devices?id=eq." + encode(command.deviceId),
+                            deviceUpdate.toString(),
+                            "return=minimal"
+                    );
+                    requireSuccess(updatedDevice, "تم تنفيذ الأمر لكن تعذر تحديث حالة الجهاز");
+                }
+
+                JSONObject values = new JSONObject();
+                values.put("status", success ? "succeeded" : "failed");
+                values.put("completed_at", isoTimestamp(System.currentTimeMillis()));
+                values.put("updated_at", isoTimestamp(System.currentTimeMillis()));
+                if (success) values.put("error_message", JSONObject.NULL);
+                else values.put("error_message", errorMessage == null ? "فشل تنفيذ الأمر على الراوتر" : errorMessage);
+                HttpResult completed = authorizedRequest(
+                        "PATCH",
+                        "/rest/v1/homenet_commands?id=eq." + encode(command.id),
+                        values.toString(),
+                        "return=minimal"
+                );
+                requireSuccess(completed, "تعذر إنهاء حالة الأمر");
+                post(callback, success, success ? "تم تنفيذ الأمر على الراوتر بنجاح." : errorMessage);
+            } catch (Exception error) {
+                post(callback, false, "تعذر تحديث نتيجة الأمر: " + safeMessage(error));
+            }
+        });
     }
 
     private HttpResult authorizedRequest(String method, String path, String body, String prefer) throws Exception {

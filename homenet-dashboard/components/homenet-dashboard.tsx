@@ -43,6 +43,12 @@ function isRecentlySeen(value: string | null) {
   return Boolean(value && Date.now() - new Date(value).getTime() < 3 * 60 * 1000);
 }
 
+function supportsInternetControl(version: string | null) {
+  if (!version) return false;
+  const [major = 0, minor = 0] = version.split(".").map((part) => Number(part));
+  return major > 0 || minor >= 4;
+}
+
 export function HomeNetDashboard() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -157,6 +163,7 @@ export function HomeNetDashboard() {
 
   const totalUsage = useMemo(() => devices.reduce((sum, device) => sum + device.used_month_bytes, 0), [devices]);
   const pendingCount = commands.filter((command) => command.status === "pending" || command.status === "processing").length;
+  const internetControlAvailable = isRecentlySeen(agent?.last_seen_at ?? null) && supportsInternetControl(agent?.app_version ?? null);
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -310,13 +317,13 @@ export function HomeNetDashboard() {
 
       <section className="system-note">
         <span className="system-note-icon">i</span>
-        <div><strong>المراقبة تعمل، والتحكم في الراوتر ما زال قيد الربط</strong><p>الأرقام والأسماء تُزامن من الهاتف. فصل الإنترنت وتطبيق السرعة فعليًا يحتاجان اختبار صفحة Access Control في TL‑WR840N؛ لن نعرض أمرًا محفوظًا كأنه نُفّذ.</p></div>
+        <div><strong>{internetControlAvailable ? "فصل وتشغيل الإنترنت جاهز" : "المراقبة تعمل، والتحكم ينتظر تطبيق الهاتف v0.4.0"}</strong><p>{internetControlAvailable ? "اترك تطبيق الهاتف مفتوحًا وزر التحكم من الموقع مُشغّلًا. تحديد السرعة سيُفعّل بعد تثبيت IP وكتابة سرعة الخط الكلية." : "ثبّت النسخة الجديدة، سجّل دخول الراوتر، ثم شغّل استقبال أوامر الموقع."}</p></div>
       </section>
 
       <section className="stats-grid">
         <article className="stat-card accent"><span>استهلاك الشهر</span><strong>{formatBytes(totalUsage)}</strong><small>من أول الشهر الميلادي</small></article>
         <article className="stat-card"><span>الأجهزة المعروفة</span><strong>{devices.length}</strong><small>{devices.filter((device) => device.is_online).length} ظهرت خلال آخر 3 دقائق</small></article>
-        <article className="stat-card"><span>أوامر غير منفذة</span><strong>{pendingCount}</strong><small>تنتظر دعم التحكم في الراوتر</small></article>
+        <article className="stat-card"><span>أوامر قيد التنفيذ</span><strong>{pendingCount}</strong><small>{internetControlAvailable ? "يستلمها الهاتف كل 10 ثوانٍ" : "تنتظر اتصال وكيل التحكم"}</small></article>
         <article className="stat-card"><span>آخر تحديث للوحة</span><strong className="small-value">{lastLoadedAt ? lastLoadedAt.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }) : "—"}</strong><small>تحديث تلقائي كل 30 ثانية</small></article>
       </section>
 
@@ -331,7 +338,7 @@ export function HomeNetDashboard() {
       {loading ? <div className="loader" aria-label="جارٍ تحديث البيانات" /> : devices.length ? (
         <section className="devices-grid">
           {devices.map((device) => (
-            <DeviceCard key={device.id} device={device} busy={busyId === device.id} controlAvailable={false} onQueueInternet={queueInternet} onSaveLimits={saveLimits} onSaveSchedule={saveSchedule} />
+            <DeviceCard key={device.id} device={device} busy={busyId === device.id} controlAvailable={internetControlAvailable} onQueueInternet={queueInternet} onSaveLimits={saveLimits} onSaveSchedule={saveSchedule} />
           ))}
         </section>
       ) : (
@@ -342,7 +349,7 @@ export function HomeNetDashboard() {
       )}
 
       <section className="queue-panel">
-        <div className="section-heading"><div><span className="eyebrow">سجل التجهيز</span><h2>الأوامر المحفوظة</h2><p className="muted">هذه الأوامر لم تُنفذ على الراوتر حتى الآن.</p></div></div>
+        <div className="section-heading"><div><span className="eyebrow">سجل التحكم</span><h2>أوامر الراوتر</h2><p className="muted">النجاح هنا يعني أن الهاتف حفظ التغيير فعلًا داخل الراوتر.</p></div></div>
         {commands.length ? <div className="command-list">{commands.map((command) => (
           <div className="command-row" key={command.id}>
             <span className={`command-dot ${command.status}`} />

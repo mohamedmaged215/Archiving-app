@@ -38,10 +38,14 @@ public class WebViewBridgeActivity extends Activity {
     private final List<DeviceSnapshot> latestSnapshots = new ArrayList<>();
     private HomeNetDatabase database;
     private Handler autoCaptureHandler;
+    private Handler commandHandler;
     private Button autoCaptureButton;
+    private Button remoteControlButton;
     private boolean autoCaptureEnabled;
+    private boolean remoteControlEnabled;
     private boolean readInProgress;
     private boolean cloudSyncInProgress;
+    private boolean commandInProgress;
     private CloudSyncManager cloudSync;
     private EditText cloudEmail;
     private EditText cloudPassword;
@@ -55,18 +59,19 @@ public class WebViewBridgeActivity extends Activity {
         database = new HomeNetDatabase(this);
         cloudSync = new CloudSyncManager(this);
         autoCaptureHandler = new Handler(Looper.getMainLooper());
+        commandHandler = new Handler(Looper.getMainLooper());
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(10), dp(10), dp(10), dp(10));
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.3.1");
+        title.setText("HomeNet Agent v0.4.0");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("اربط نفس حساب لوحة HomeNet مرة واحدة، ثم سجّل دخول الراوتر. اترك التطبيق مفتوحًا أثناء القراءة التلقائية؛ إغلاقه يوقف القراءات الجديدة، ولا يمسح القراءات المحفوظة.");
+        help.setText("اربط حساب HomeNet وسجّل دخول الراوتر. اترك التطبيق مفتوحًا لتسجيل الاستهلاك وتنفيذ أوامر الفصل الآمنة القادمة من الموقع.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -97,6 +102,10 @@ public class WebViewBridgeActivity extends Activity {
         Button usageSummary = new Button(this);
         usageSummary.setText("ملخص الاستهلاك");
         root.addView(usageSummary, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        remoteControlButton = new Button(this);
+        remoteControlButton.setText("تشغيل التحكم من الموقع");
+        root.addView(remoteControlButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         cloudEmail = new EditText(this);
         cloudEmail.setHint("بريد حساب HomeNet");
@@ -166,6 +175,7 @@ public class WebViewBridgeActivity extends Activity {
         readDevices.setOnClickListener(v -> readDevices(false));
         readDeviceNames.setOnClickListener(v -> openDhcpClientsAndReadNames(0));
         usageSummary.setOnClickListener(v -> showUsageSummary());
+        remoteControlButton.setOnClickListener(v -> toggleRemoteControl());
         autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
         cloudLoginButton.setOnClickListener(v -> handleCloudLogin());
         cloudSyncButton.setOnClickListener(v -> syncCloud(true));
@@ -215,6 +225,208 @@ public class WebViewBridgeActivity extends Activity {
             cloudSyncButton.setEnabled(true);
             cloudState.setText(message);
         });
+    }
+
+    private void toggleRemoteControl() {
+        if (!cloudSync.hasSession()) {
+            cloudState.setText("اربط حساب HomeNet أولًا ثم شغّل التحكم.");
+            return;
+        }
+        remoteControlEnabled = !remoteControlEnabled;
+        commandHandler.removeCallbacksAndMessages(null);
+        if (remoteControlEnabled) {
+            remoteControlButton.setText("إيقاف التحكم من الموقع");
+            cloudState.setText("التحكم يعمل. اترك التطبيق مفتوحًا ومسجّلًا داخل الراوتر.");
+            pollCommands();
+        } else {
+            remoteControlButton.setText("تشغيل التحكم من الموقع");
+            cloudState.setText("تم إيقاف استقبال أوامر الموقع.");
+        }
+    }
+
+    private void scheduleCommandPoll(long delayMs) {
+        commandHandler.removeCallbacksAndMessages(null);
+        if (remoteControlEnabled) commandHandler.postDelayed(this::pollCommands, delayMs);
+    }
+
+    private void pollCommands() {
+        if (!remoteControlEnabled || commandInProgress) return;
+        commandInProgress = true;
+        cloudSync.claimNextCommand((command, message) -> {
+            if (!remoteControlEnabled) {
+                commandInProgress = false;
+                return;
+            }
+            if (command == null) {
+                commandInProgress = false;
+                if (message != null && message.startsWith("تعذر")) cloudState.setText(message);
+                scheduleCommandPoll(10_000L);
+                return;
+            }
+            cloudState.setText("وصل أمر " + command.action + " للجهاز " + displayName(command.deviceName) + ".");
+            executeRouterCommand(command);
+        });
+    }
+
+    private void executeRouterCommand(CloudSyncManager.RouterCommand command) {
+        if (!"set_internet".equals(command.action)) {
+            finishRouterCommand(command, false, "هذا الإصدار ينفذ فصل وتشغيل الإنترنت فقط.");
+            return;
+        }
+        if (command.mac == null || command.mac.trim().isEmpty()) {
+            finishRouterCommand(command, false, "لا يوجد MAC صالح للجهاز.");
+            return;
+        }
+        boolean internetEnabled = command.payload.optBoolean("enabled", true);
+        String compactMac = command.mac.replace(":", "").replace("-", "").toUpperCase(Locale.US);
+        String hostName = "HN_" + compactMac.substring(Math.max(0, compactMac.length() - 6));
+        String compactDeviceId = command.deviceId.replace("-", "");
+        String ruleName = "HN_BLOCK_" + compactDeviceId.substring(0, Math.min(8, compactDeviceId.length()));
+
+        status.setText("جاري تجهيز Access Control بالسياسة الآمنة…");
+        openAccessControlPage("rule", () -> configureSafeAccessPolicy(ok -> {
+            if (!ok) {
+                finishRouterCommand(command, false, "تعذر ضبط سياسة Access Control الآمنة. تأكد من تسجيل دخول الراوتر.");
+                return;
+            }
+            status.setText("جاري تعريف الجهاز داخل Access Control…");
+            openAccessControlPage("host", () -> ensureAccessHost(hostName, command.mac, hostOk -> {
+                if (!hostOk) {
+                    finishRouterCommand(command, false, "تعذر إنشاء تعريف MAC للجهاز على الراوتر.");
+                    return;
+                }
+                status.setText(internetEnabled ? "جاري تشغيل الإنترنت للجهاز…" : "جاري فصل الإنترنت عن الجهاز…");
+                openAccessControlPage("rule", () -> setBlockingRule(
+                        ruleName,
+                        hostName,
+                        !internetEnabled,
+                        ruleOk -> finishRouterCommand(
+                                command,
+                                ruleOk,
+                                ruleOk ? null : "تعذر حفظ قاعدة الجهاز على الراوتر."
+                        )
+                ));
+            }));
+        }));
+    }
+
+    private void finishRouterCommand(CloudSyncManager.RouterCommand command, boolean success, String error) {
+        cloudSync.finishCommand(command, success, error, (saved, message) -> {
+            commandInProgress = false;
+            cloudState.setText(message);
+            status.setText(success ? "اكتمل أمر الراوتر بنجاح." : error);
+            scheduleCommandPoll(4_000L);
+        });
+    }
+
+    private interface BooleanStep { void done(boolean success); }
+
+    private void openAccessControlPage(String child, Runnable afterOpen) {
+        String parentScript = clickRouterLinkScript("accesscontrol");
+        web.evaluateJavascript(parentScript, ignored -> commandHandler.postDelayed(() -> {
+            web.evaluateJavascript(clickRouterLinkScript(child), value -> {
+                boolean clicked = "true".equalsIgnoreCase(decodeJs(value));
+                if (!clicked) {
+                    status.setText("لم أجد قائمة Access Control. سجّل دخول الراوتر ثم أعد المحاولة.");
+                    afterOpen.run();
+                    return;
+                }
+                commandHandler.postDelayed(afterOpen, 650L);
+            });
+        }, 300L));
+    }
+
+    private String clickRouterLinkScript(String normalizedTarget) {
+        return "(function(){" +
+                "function n(v){return String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');}" +
+                "function scan(w){try{var a=w.document.getElementsByTagName('a');" +
+                "for(var i=0;i<a.length;i++){if(n(a[i].innerText||a[i].textContent)==='" + normalizedTarget + "'){a[i].click();return true;}}" +
+                "for(var j=0;j<w.frames.length;j++){if(scan(w.frames[j]))return true;}}catch(e){}return false;}" +
+                "return scan(window);})()";
+    }
+
+    private void configureSafeAccessPolicy(BooleanStep callback) {
+        String js = "(function(){function scan(w){try{var d=w.document,e=d.getElementById('enableFw');" +
+                "if(e){var allow=d.getElementById('act_en'),deny=d.getElementById('act_dis');" +
+                "if(allow)allow.checked=true;if(deny)deny.checked=false;e.checked=true;" +
+                "var b=d.querySelectorAll('input,button');for(var i=0;i<b.length;i++){" +
+                "if(String(b[i].value||b[i].innerText||'').trim().toLowerCase()==='save'){b[i].click();return true;}}return false;}" +
+                "for(var j=0;j<w.frames.length;j++){var r=scan(w.frames[j]);if(r)return r;}}catch(x){}return false;}" +
+                "return scan(window);})()";
+        web.evaluateJavascript(js, value -> commandHandler.postDelayed(
+                () -> callback.done("true".equalsIgnoreCase(decodeJs(value))),
+                650L
+        ));
+    }
+
+    private void ensureAccessHost(String hostName, String mac, BooleanStep callback) {
+        String inspect = "(function(){var mac=" + JSONObject.quote(mac.toUpperCase(Locale.US)) + ";" +
+                "function scan(w){try{var d=w.document,body=String(d.body?d.body.innerText:'').toUpperCase();" +
+                "if(d.getElementById('mode')&&d.getElementById('entryName'))return 'form';" +
+                "if(body.indexOf('HOST SETTINGS')>=0){if(body.indexOf(mac)>=0)return 'exists';" +
+                "var b=d.querySelectorAll('input,button');for(var i=0;i<b.length;i++){var t=String(b[i].value||b[i].innerText||'').toLowerCase();" +
+                "if(t.indexOf('add new')>=0){b[i].click();return 'opening';}}}" +
+                "for(var j=0;j<w.frames.length;j++){var r=scan(w.frames[j]);if(r!=='none')return r;}}catch(e){}return 'none';}" +
+                "return scan(window);})()";
+        web.evaluateJavascript(inspect, value -> {
+            String state = decodeJs(value);
+            if ("exists".equals(state)) {
+                callback.done(true);
+            } else if ("opening".equals(state) || "form".equals(state)) {
+                commandHandler.postDelayed(() -> fillAndSaveHost(hostName, mac, callback), 400L);
+            } else callback.done(false);
+        });
+    }
+
+    private void fillAndSaveHost(String hostName, String mac, BooleanStep callback) {
+        String setMode = "(function(){function pick(s,label){for(var i=0;i<s.options.length;i++){if(String(s.options[i].text).trim().toLowerCase()===label){s.selectedIndex=i;if(s.onchange)s.onchange();return true;}}return false;}" +
+                "function scan(w){try{var m=w.document.getElementById('mode');if(m)return pick(m,'mac address');for(var j=0;j<w.frames.length;j++){if(scan(w.frames[j]))return true;}}catch(e){}return false;}return scan(window);})()";
+        web.evaluateJavascript(setMode, ignored -> commandHandler.postDelayed(() -> {
+            String fill = "(function(){var name=" + JSONObject.quote(hostName) + ",mac=" + JSONObject.quote(mac.toUpperCase(Locale.US)) + ";" +
+                    "function scan(w){try{var d=w.document,n=d.getElementById('entryName'),m=d.getElementById('macAddr');if(n&&m){n.value=name;m.value=mac;" +
+                    "var b=d.querySelectorAll('input,button');for(var i=0;i<b.length;i++){if(String(b[i].value||b[i].innerText||'').trim().toLowerCase()==='save'){b[i].click();return true;}}}" +
+                    "for(var j=0;j<w.frames.length;j++){if(scan(w.frames[j]))return true;}}catch(e){}return false;}return scan(window);})()";
+            web.evaluateJavascript(fill, result -> commandHandler.postDelayed(
+                    () -> callback.done("true".equalsIgnoreCase(decodeJs(result))),
+                    650L
+            ));
+        }, 250L));
+    }
+
+    private void setBlockingRule(String ruleName, String hostName, boolean blocked, BooleanStep callback) {
+        String inspect = "(function(){var rule=" + JSONObject.quote(ruleName) + ";function scan(w){try{var d=w.document,rows=d.querySelectorAll('tr');" +
+                "for(var i=0;i<rows.length;i++){if(String(rows[i].innerText||rows[i].textContent||'').indexOf(rule)>=0){var a=rows[i].getElementsByTagName('a');" +
+                "for(var k=0;k<a.length;k++){if(String(a[k].innerText||a[k].textContent||'').toLowerCase().indexOf('edit')>=0){a[k].click();return 'edit';}}}}" +
+                "var body=String(d.body?d.body.innerText:'').toLowerCase();if(body.indexOf('access control rule management')>=0){" +
+                "if(!" + blocked + ")return 'allowed';var b=d.querySelectorAll('input,button');for(var q=0;q<b.length;q++){if(String(b[q].value||b[q].innerText||'').toLowerCase().indexOf('add new')>=0){b[q].click();return 'add';}}}" +
+                "for(var j=0;j<w.frames.length;j++){var r=scan(w.frames[j]);if(r!=='none')return r;}}catch(e){}return 'none';}return scan(window);})()";
+        web.evaluateJavascript(inspect, value -> {
+            String state = decodeJs(value);
+            if ("allowed".equals(state)) {
+                callback.done(true);
+                return;
+            }
+            if (!"edit".equals(state) && !"add".equals(state)) {
+                callback.done(false);
+                return;
+            }
+            commandHandler.postDelayed(() -> fillAndSaveRule(ruleName, hostName, blocked, callback), 450L);
+        });
+    }
+
+    private void fillAndSaveRule(String ruleName, String hostName, boolean blocked, BooleanStep callback) {
+        String js = "(function(){var rn=" + JSONObject.quote(ruleName) + ",hn=" + JSONObject.quote(hostName) + ";" +
+                "function selectText(s,text){if(!s)return false;for(var i=0;i<s.options.length;i++){if(String(s.options[i].text).trim().toLowerCase()===String(text).toLowerCase()){s.selectedIndex=i;return true;}}return false;}" +
+                "function scan(w){try{var d=w.document,n=d.getElementById('ruleName');if(n){n.value=rn;" +
+                "selectText(d.getElementById('internalHostRef'),hn);selectText(d.getElementById('externalHostRef'),'Any Host');" +
+                "selectText(d.getElementById('scheduleRef'),'Any Time');selectText(d.getElementById('action'),'Deny');" +
+                "selectText(d.getElementById('enable'),'" + (blocked ? "Enabled" : "Disabled") + "');selectText(d.getElementById('direction'),'OUT');selectText(d.getElementById('protocol'),'ALL');" +
+                "var b=d.querySelectorAll('input,button');for(var i=0;i<b.length;i++){if(String(b[i].value||b[i].innerText||'').trim().toLowerCase()==='save'){b[i].click();return true;}}}" +
+                "for(var j=0;j<w.frames.length;j++){if(scan(w.frames[j]))return true;}}catch(e){}return false;}return scan(window);})()";
+        web.evaluateJavascript(js, result -> commandHandler.postDelayed(
+                () -> callback.done("true".equalsIgnoreCase(decodeJs(result))),
+                700L
+        ));
     }
 
     private void showUsageSummary() {
@@ -562,7 +774,9 @@ public class WebViewBridgeActivity extends Activity {
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     @Override protected void onDestroy(){
         autoCaptureEnabled=false;
+        remoteControlEnabled=false;
         if(autoCaptureHandler!=null)autoCaptureHandler.removeCallbacksAndMessages(null);
+        if(commandHandler!=null)commandHandler.removeCallbacksAndMessages(null);
         if(cloudSync!=null)cloudSync.close();
         if(database!=null)database.close();
         super.onDestroy();
