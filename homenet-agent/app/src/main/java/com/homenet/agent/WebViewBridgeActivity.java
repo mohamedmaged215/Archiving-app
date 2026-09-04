@@ -79,12 +79,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.5.0");
+        title.setText("HomeNet Agent v0.6.0");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("احفظ بيانات الراوتر مرة واحدة ثم شغّل المراقبة بالخلفية. بعدها يمكنك سحب التطبيق من التطبيقات الأخيرة وسيستمر العمل.");
+        help.setText("قارئ مباشر وآمن يمنع تضاعف الاستهلاك. شغّل المراقبة واسمح بالبطارية غير المقيّدة ليستمر العمل والشاشة مغلقة.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -101,7 +101,7 @@ public class WebViewBridgeActivity extends Activity {
         LinearLayout secondaryButtons = new LinearLayout(this);
         secondaryButtons.setOrientation(LinearLayout.HORIZONTAL);
         Button readDevices = new Button(this);
-        readDevices.setText("قراءة الأجهزة");
+        readDevices.setText("قراءة فورية آمنة");
         secondaryButtons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         autoCaptureButton = new Button(this);
         autoCaptureButton.setText(HomeNetBackgroundService.isEnabled(this)
@@ -222,7 +222,7 @@ public class WebViewBridgeActivity extends Activity {
 
         openRouter.setOnClickListener(v -> web.loadUrl(routerBase));
         openStatistics.setOnClickListener(v -> clickStatisticsMenu(null));
-        readDevices.setOnClickListener(v -> readDevices(false));
+        readDevices.setOnClickListener(v -> requestDirectCapture());
         readDeviceNames.setOnClickListener(v -> openDhcpClientsAndReadNames(0));
         usageSummary.setOnClickListener(v -> showUsageSummary());
         remoteControlButton.setOnClickListener(v -> openBatterySettings());
@@ -234,6 +234,7 @@ public class WebViewBridgeActivity extends Activity {
         requestNotificationPermission();
         if (HomeNetBackgroundService.isEnabled(this) && credentialsStore.hasCredentials()) {
             HomeNetBackgroundService.start(this);
+            requestBatteryExemptionIfNeeded();
         }
         if (cloudSync.hasSession()) syncCloud(false);
     }
@@ -260,9 +261,30 @@ public class WebViewBridgeActivity extends Activity {
             requestNotificationPermission();
             HomeNetBackgroundService.start(this);
             autoCaptureButton.setText("إيقاف المراقبة بالخلفية");
-            backgroundState.setText("بدأت الخدمة. يمكنك الآن سحب التطبيق من التطبيقات الأخيرة.");
+            backgroundState.setText("بدأت الخدمة المحمية. وافق على تشغيل البطارية غير المقيّد عند ظهوره.");
+            requestBatteryExemptionIfNeeded();
         } catch (Exception error) {
             backgroundState.setText(error.getMessage() == null ? "تعذر حفظ بيانات الراوتر." : error.getMessage());
+        }
+    }
+
+    private void requestDirectCapture() {
+        if (!credentialsStore.hasCredentials()) {
+            backgroundState.setText("احفظ بيانات الراوتر وشغّل المراقبة أولًا.");
+            return;
+        }
+        HomeNetBackgroundService.captureNow(this);
+        autoCaptureButton.setText("إيقاف المراقبة بالخلفية");
+        backgroundState.setText("تم طلب قراءة مباشرة آمنة من الراوتر.");
+    }
+
+    private void requestBatteryExemptionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            if (!powerManager.isIgnoringBatteryOptimizations(getPackageName())) openBatterySettings();
+        } catch (Exception ignored) {
+            // The dedicated Samsung battery button remains available as a fallback.
         }
     }
 

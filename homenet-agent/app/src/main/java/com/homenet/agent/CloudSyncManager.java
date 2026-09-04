@@ -174,7 +174,7 @@ final class CloudSyncManager {
         JSONObject values = new JSONObject();
         values.put("home_id", homeId);
         values.put("name", "هاتف المراقبة");
-        values.put("app_version", "0.5.0");
+        values.put("app_version", "0.6.0");
         values.put("last_seen_at", isoTimestamp(System.currentTimeMillis()));
 
         if (agentId == null || agentId.isEmpty()) {
@@ -303,6 +303,26 @@ final class CloudSyncManager {
                     return;
                 }
 
+                String action = row.getString("action");
+                JSONObject payload = row.optJSONObject("payload") == null
+                        ? new JSONObject()
+                        : row.getJSONObject("payload");
+                if ("sync_now".equals(action) || "refresh_names".equals(action)
+                        || "reset_usage".equals(action)) {
+                    RouterCommand command = new RouterCommand(
+                            commandId,
+                            "",
+                            action,
+                            payload,
+                            "كل الأجهزة",
+                            "",
+                            "",
+                            row.optInt("attempts", 0) + 1
+                    );
+                    mainHandler.post(() -> callback.onResult(command, "تم استلام الأمر."));
+                    return;
+                }
+
                 String deviceId = row.optString("device_id", "");
                 if (deviceId.isEmpty()) throw new IllegalStateException("الأمر لا يحتوي على جهاز");
                 HttpResult deviceResponse = authorizedRequest(
@@ -333,8 +353,8 @@ final class CloudSyncManager {
                 RouterCommand command = new RouterCommand(
                         commandId,
                         deviceId,
-                        row.getString("action"),
-                        row.optJSONObject("payload") == null ? new JSONObject() : row.getJSONObject("payload"),
+                        action,
+                        payload,
                         customName.isEmpty() ? routerName : customName,
                         device.optString("current_ip", ""),
                         addresses.getJSONObject(0).getString("mac"),
@@ -361,6 +381,28 @@ final class CloudSyncManager {
                             "return=minimal"
                     );
                     requireSuccess(updatedDevice, "تم تنفيذ الأمر لكن تعذر تحديث حالة الجهاز");
+                }
+
+                if (success && "reset_usage".equals(command.action)) {
+                    String homeId = ensureHome();
+                    String startedAt = isoTimestamp(System.currentTimeMillis());
+                    JSONObject homeUpdate = new JSONObject();
+                    homeUpdate.put("usage_started_at", startedAt);
+                    homeUpdate.put("updated_at", startedAt);
+                    HttpResult updatedHome = authorizedRequest(
+                            "PATCH",
+                            "/rest/v1/homenet_homes?id=eq." + encode(homeId),
+                            homeUpdate.toString(),
+                            "return=minimal"
+                    );
+                    requireSuccess(updatedHome, "تم تصفير الهاتف لكن تعذر بدء العداد السحابي");
+                    HttpResult deletedUsage = authorizedRequest(
+                            "DELETE",
+                            "/rest/v1/homenet_usage_samples?home_id=eq." + encode(homeId),
+                            null,
+                            "return=minimal"
+                    );
+                    requireSuccess(deletedUsage, "تم تصفير الهاتف لكن تعذر حذف القراءات السحابية");
                 }
 
                 JSONObject values = new JSONObject();

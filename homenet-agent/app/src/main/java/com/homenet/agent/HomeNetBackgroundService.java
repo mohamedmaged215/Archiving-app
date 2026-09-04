@@ -9,6 +9,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -39,10 +40,19 @@ public class HomeNetBackgroundService extends Service {
     private boolean captureRunning;
     private boolean commandRunning;
     private long lastNamesAt;
+    private PowerManager.WakeLock serviceWakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     static void start(Context context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", true).apply();
         Intent intent = new Intent(context, HomeNetBackgroundService.class).setAction(ACTION_START);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
+        else context.startService(intent);
+    }
+
+    static void captureNow(Context context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("enabled", true).apply();
+        Intent intent = new Intent(context, HomeNetBackgroundService.class).setAction(ACTION_CAPTURE_NOW);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent);
         else context.startService(intent);
     }
@@ -79,11 +89,9 @@ public class HomeNetBackgroundService extends Service {
         }
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("enabled", true).apply();
         startForeground(NOTIFICATION_ID, notification("بدء مراقبة الراوتر…"));
-        if (intent != null && ACTION_CAPTURE_NOW.equals(intent.getAction())) scheduleCapture(0);
-        else {
-            scheduleCapture(1_500L);
-            scheduleCommandPoll(4_000L);
-        }
+        acquireContinuousLocks();
+        scheduleCapture(intent != null && ACTION_CAPTURE_NOW.equals(intent.getAction()) ? 0 : 1_500L);
+        scheduleCommandPoll(4_000L);
         return START_STICKY;
     }
 
@@ -183,6 +191,12 @@ public class HomeNetBackgroundService extends Service {
             } else if ("sync_now".equals(command.action)) {
                 scheduleCapture(0);
                 completeCommand(command, true, null);
+            } else if ("reset_usage".equals(command.action)) {
+                RouterRpcClient router = connectedRouter();
+                List<RouterRpcClient.TrafficStat> stats = router.readTrafficStats();
+                long baselineAt = System.currentTimeMillis();
+                database.resetUsageWithBaselines(stats, baselineAt);
+                completeCommand(command, true, null);
             } else {
                 completeCommand(command, false, "هذا النوع من الأوامر سيُضاف في إصدار لاحق.");
             }
@@ -232,6 +246,48 @@ public class HomeNetBackgroundService extends Service {
 
     private void release(PowerManager.WakeLock wakeLock) {
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void acquireContinuousLocks() {
+        try {
+            if (serviceWakeLock == null) {
+                PowerManager manager = (PowerManager) getSystemService(POWER_SERVICE);
+                serviceWakeLock = manager.newWakeLock(
+                        PowerManager.PARTIAL_WAKE_LOCK,
+                        "HomeNetAgent:continuous-monitor"
+                );
+                serviceWakeLock.setReferenceCounted(false);
+            }
+            if (!serviceWakeLock.isHeld()) serviceWakeLock.acquire();
+        } catch (Exception ignored) {
+            serviceWakeLock = null;
+        }
+
+        try {
+            if (wifiLock == null) {
+                WifiManager manager = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                wifiLock = manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                        "HomeNetAgent:router-wifi");
+                wifiLock.setReferenceCounted(false);
+            }
+            if (!wifiLock.isHeld()) wifiLock.acquire();
+        } catch (Exception ignored) {
+            wifiLock = null;
+        }
+    }
+
+    private void releaseContinuousLocks() {
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Exception ignored) {
+            // The operating system may already have released it.
+        }
+        try {
+            if (serviceWakeLock != null && serviceWakeLock.isHeld()) serviceWakeLock.release();
+        } catch (Exception ignored) {
+            // The operating system may already have released it.
+        }
     }
 
     private void updateStatus(String message, boolean healthy) {
@@ -316,6 +372,7 @@ public class HomeNetBackgroundService extends Service {
         routerExecutor.shutdownNow();
         if (cloudSync != null) cloudSync.close();
         if (database != null) database.close();
+        releaseContinuousLocks();
         if (isEnabled(this)) scheduleSafetyRestart();
         super.onDestroy();
     }

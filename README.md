@@ -4,7 +4,7 @@ HomeNet monitors per-device traffic from a TP-Link TL-WR840N on the local networ
 stores readings on the phone, syncs them to the HomeNet dashboard, and executes
 safe queued internet access commands.
 
-## Android v0.5.0 background setup
+## Android v0.6.0 background setup
 
 1. Open the app and link the HomeNet dashboard account.
 2. Enter the router address, username, and password. The router password is encrypted

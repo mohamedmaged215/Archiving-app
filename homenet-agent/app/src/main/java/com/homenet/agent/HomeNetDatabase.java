@@ -12,6 +12,10 @@ import java.util.List;
 final class HomeNetDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "homenet.db";
     private static final int DATABASE_VERSION = 3;
+    // The TL-WR840N is a 100 Mbps router. This deliberately generous ceiling
+    // rejects parser/counter jumps without clipping legitimate traffic.
+    private static final long MAX_PLAUSIBLE_BYTES_PER_SECOND = 25_000_000L;
+    private static final long DELTA_CUSHION_BYTES = 5_000_000L;
 
     HomeNetDatabase(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
@@ -64,11 +68,12 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
         SQLiteDatabase db = getWritableDatabase();
         ensureDeviceProfile(db, mac, ip, capturedAt);
         long previousTotal = 0;
+        long previousCapturedAt = capturedAt;
         boolean firstSnapshot = true;
 
         try (Cursor cursor = db.query(
                 "traffic_snapshots",
-                new String[]{"bytes_total"},
+                new String[]{"bytes_total", "captured_at"},
                 "mac = ?",
                 new String[]{mac},
                 null,
@@ -78,11 +83,20 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
             if (cursor.moveToFirst()) {
                 firstSnapshot = false;
                 previousTotal = cursor.getLong(0);
+                previousCapturedAt = cursor.getLong(1);
             }
         }
 
         boolean counterReset = !firstSnapshot && bytesTotal < previousTotal;
-        long deltaBytes = firstSnapshot || counterReset ? 0 : bytesTotal - previousTotal;
+        long rawDelta = firstSnapshot || counterReset ? 0 : bytesTotal - previousTotal;
+        long elapsedSeconds = Math.max(1L, (capturedAt - previousCapturedAt) / 1000L);
+        long maximumPlausibleDelta = elapsedSeconds > (Long.MAX_VALUE - DELTA_CUSHION_BYTES)
+                / MAX_PLAUSIBLE_BYTES_PER_SECOND
+                ? Long.MAX_VALUE
+                : elapsedSeconds * MAX_PLAUSIBLE_BYTES_PER_SECOND + DELTA_CUSHION_BYTES;
+        boolean implausibleJump = !firstSnapshot && !counterReset && rawDelta > maximumPlausibleDelta;
+        counterReset = counterReset || implausibleJump;
+        long deltaBytes = firstSnapshot || counterReset ? 0 : rawDelta;
 
         ContentValues values = new ContentValues();
         values.put("ip", ip);
@@ -97,6 +111,33 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
         db.insertOrThrow("traffic_snapshots", null, values);
 
         return new SaveResult(firstSnapshot, counterReset, previousTotal, deltaBytes);
+    }
+
+    void resetUsageWithBaselines(List<RouterRpcClient.TrafficStat> stats, long capturedAt) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete("traffic_snapshots", null, null);
+            for (RouterRpcClient.TrafficStat stat : stats) {
+                ensureDeviceProfile(db, stat.mac, stat.ip, capturedAt);
+                ContentValues values = new ContentValues();
+                values.put("ip", stat.ip);
+                values.put("mac", stat.mac);
+                values.put("captured_at", capturedAt);
+                values.put("packets_total", stat.totalPackets);
+                values.put("bytes_total", stat.totalBytes);
+                values.put("packets_current", stat.currentPackets);
+                values.put("bytes_current", stat.currentBytes);
+                values.put("delta_bytes", 0);
+                values.put("counter_reset", 1);
+                // A baseline establishes the new zero; it is not usage to upload.
+                values.put("cloud_synced", 1);
+                db.insertOrThrow("traffic_snapshots", null, values);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
     }
 
     private void ensureDeviceProfile(SQLiteDatabase db, String mac, String ip, long updatedAt) {

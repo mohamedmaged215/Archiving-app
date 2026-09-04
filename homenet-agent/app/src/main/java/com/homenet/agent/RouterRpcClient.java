@@ -197,7 +197,7 @@ final class RouterRpcClient {
         connection.setUseCaches(false);
         connection.setRequestProperty("Cookie", cookie);
         connection.setRequestProperty("Referer", baseUrl + "/mainFrame.htm");
-        connection.setRequestProperty("User-Agent", "HomeNet-Agent/0.5 Android");
+        connection.setRequestProperty("User-Agent", "HomeNet-Agent/0.6 Android");
         connection.setRequestProperty("Accept", "text/html,text/plain,*/*");
         if (body != null) {
             connection.setDoOutput(true);
