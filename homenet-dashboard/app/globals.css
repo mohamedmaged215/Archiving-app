@@ -77,6 +77,19 @@ button:not(:disabled):hover { transform: translateY(-1px); }
 .system-note strong { display: block; margin-bottom: 3px; }
 .system-note p { margin: 0; color: #526b8e; font-size: .86rem; line-height: 1.65; }
 
+.usage-filter { display: grid; grid-template-columns: minmax(220px, .75fr) 1.5fr; gap: 18px; align-items: center; margin: 16px 0; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 9px 26px #1831530a; }
+.usage-filter h2 { margin: 4px 0 0; font-size: 1.25rem; }
+.range-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; padding: 5px; border-radius: 13px; background: #eef2f7; }
+.range-buttons button { min-height: 39px; padding: 8px 10px; border: 0; border-radius: 9px; color: #53637a; background: transparent; font-weight: 750; }
+.range-buttons button.active { color: white; background: var(--blue); box-shadow: 0 5px 14px #2563eb30; }
+.range-buttons.compact { margin-bottom: 10px; }
+.range-buttons.compact button { font-size: .78rem; }
+.date-fields { display: grid; grid-template-columns: 1fr 1fr auto; gap: 9px; align-items: end; margin: 10px 0; }
+.date-fields.global { grid-column: 1 / -1; justify-self: end; width: min(100%, 650px); }
+.detail-usage { display: flex; justify-content: space-between; align-items: center; margin: 10px 0 18px; padding: 13px 14px; border-radius: 11px; color: #34506f; background: var(--blue-soft); }
+.detail-usage span { font-size: .78rem; }
+.detail-usage strong { color: var(--blue); font-size: 1.15rem; }
+
 .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin: 16px 0 34px; }
 .stat-card { min-height: 128px; display: grid; align-content: space-between; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 9px 26px #1831530a; }
 .stat-card.accent { color: white; border-color: var(--blue); background: var(--blue); }
@@ -95,6 +108,13 @@ button:not(:disabled):hover { transform: translateY(-1px); }
 .device-icon { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; color: var(--blue); background: var(--blue-soft); font-size: 1.25rem; }
 .device-identity { min-width: 0; }
 .device-heading h3 { margin: 0 0 4px; overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
+.name-row { display: flex; gap: 8px; align-items: center; }
+.name-row h3 { min-width: 0; }
+.edit-name { flex: 0 0 auto; padding: 2px 6px; border: 0; color: var(--blue); background: transparent; font-size: .7rem; font-weight: 750; }
+.rename-row { display: grid; grid-template-columns: 1fr auto auto; gap: 5px; margin-bottom: 5px; }
+.rename-row input { min-width: 0; padding: 7px 9px; }
+.mini-button { border: 0; border-radius: 8px; padding: 6px 8px; color: white; background: var(--blue); font-size: .7rem; font-weight: 750; }
+.mini-button.ghost { color: #53637a; background: #e9eef5; }
 .device-heading p { margin: 0; overflow: hidden; color: var(--muted); direction: ltr; text-align: right; font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .status-pill { border-radius: 999px; padding: 6px 9px; font-size: .7rem; font-weight: 800; white-space: nowrap; }
 .status-pill.online { color: #087451; background: #e6f8f1; }
@@ -115,6 +135,10 @@ button:not(:disabled):hover { transform: translateY(-1px); }
 .period-field { grid-column: 1 / -1; }
 .schedule-row label { font-size: .78rem; }
 .full-button { width: 100%; }
+.schedule-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.schedule-actions button { width: 100%; }
+.schedule-live { color: var(--success); font-size: .72rem; }
+.danger-outline { border: 1px solid #f0bdc4; border-radius: 11px; padding: 11px 15px; color: var(--danger); background: #fff7f8; font-weight: 750; }
 
 .empty-state { padding: 54px 24px; text-align: center; border: 1px dashed #b7c6d8; border-radius: 18px; background: #fafcff; }
 .empty-icon { color: var(--blue); font-size: 3rem; }
@@ -153,6 +177,8 @@ footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 4
   .agent-state { width: 100%; }
   .section-heading { align-items: stretch; flex-direction: column; }
   .toolbar button { flex: 1; }
+  .usage-filter { grid-template-columns: 1fr; }
+  .date-fields.global { grid-column: auto; justify-self: stretch; }
 }
 
 @media (max-width: 520px) {
@@ -167,7 +193,9 @@ footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 4
   .device-card { padding: 17px; }
   .device-heading { grid-template-columns: auto minmax(0, 1fr); }
   .status-pill { grid-column: 1 / -1; width: fit-content; }
-  .device-actions, .control-grid, .schedule-row { grid-template-columns: 1fr; }
+  .device-actions, .control-grid, .schedule-row, .schedule-actions, .date-fields { grid-template-columns: 1fr; }
+  .range-buttons { grid-template-columns: 1fr 1fr; }
+  .toolbar { flex-wrap: wrap; }
   .period-field { grid-column: auto; }
   .command-row { grid-template-columns: auto 1fr auto; }
   .command-row small { grid-column: 2 / -1; }

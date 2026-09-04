@@ -2,6 +2,7 @@ export type Home = {
   id: string;
   name: string;
   router_model: string;
+  usage_started_at: string;
 };
 
 export type Agent = {
@@ -22,8 +23,26 @@ export type Device = {
   speed_limit_kbps: number | null;
   last_seen_at: string | null;
   used_bytes: number;
-  used_month_bytes: number;
+  quota_used_bytes: number;
+  sample_count: number;
   mac_addresses: string[];
+  schedule: DeviceSchedule | null;
+};
+
+export type DeviceSchedule = {
+  id: string;
+  block_from: string;
+  block_until: string;
+  days_of_week: number[];
+  enabled: boolean;
+};
+
+export type UsagePreset = "today" | "week" | "month" | "custom";
+
+export type UsageRange = {
+  from: string;
+  to: string;
+  label: string;
 };
 
 export type Command = {
