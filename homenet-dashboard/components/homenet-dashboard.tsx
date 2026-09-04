@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { DeviceCard } from "@/components/device-card";
 import { supabase } from "@/lib/supabase";
@@ -56,10 +56,11 @@ export function HomeNetDashboard() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
+  const hasLoadedDashboard = useRef(false);
 
   const loadDashboard = useCallback(async () => {
     if (!session) return;
-    setLoading(true);
+    if (!hasLoadedDashboard.current) setLoading(true);
 
     const { data: homeRow, error: homeError } = await supabase
       .from("homenet_homes")
@@ -77,6 +78,7 @@ export function HomeNetDashboard() {
       setHome(null);
       setDevices([]);
       setCommands([]);
+      hasLoadedDashboard.current = true;
       setLoading(false);
       return;
     }
@@ -120,6 +122,7 @@ export function HomeNetDashboard() {
     })) as Device[]);
     setCommands((commandsResult.data ?? []) as Command[]);
     setLastLoadedAt(new Date());
+    hasLoadedDashboard.current = true;
     setLoading(false);
   }, [session]);
 
