@@ -141,6 +141,7 @@ export function HomeNetDashboard() {
     const channel = supabase.channel(`homenet-dashboard-${session.user.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_devices" }, () => void loadDashboard())
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "homenet_usage_samples" }, () => void loadDashboard())
+      .on("postgres_changes", { event: "*", schema: "public", table: "homenet_usage_daily" }, () => void loadDashboard())
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_agents" }, () => void loadDashboard())
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_commands" }, () => void loadDashboard())
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_schedules" }, () => void loadDashboard()).subscribe();
@@ -226,7 +227,11 @@ export function HomeNetDashboard() {
     const startedAt = new Date().toISOString();
     const homeResult = await supabase.from("homenet_homes").update({ usage_started_at: startedAt, updated_at: startedAt }).eq("id", home.id);
     if (homeResult.error) { setNotice({ kind: "error", text: `تعذر بدء عداد جديد: ${homeResult.error.message}` }); setBusyId(null); return; }
-    const deleteResult = await supabase.from("homenet_usage_samples").delete().eq("home_id", home.id).lt("captured_at", startedAt);
+    const [deleteDailyResult, deleteCountersResult, deleteRawResult] = await Promise.all([
+      supabase.from("homenet_usage_daily").delete().eq("home_id", home.id),
+      supabase.from("homenet_usage_counters").delete().eq("home_id", home.id),
+      supabase.from("homenet_usage_samples").delete().eq("home_id", home.id),
+    ]);
     let resetCommandError: string | null = null;
     if (realResetAvailable) {
       const commandResult = await supabase.from("homenet_commands").insert({
@@ -238,7 +243,8 @@ export function HomeNetDashboard() {
       resetCommandError = commandResult.error?.message ?? null;
     }
     setBusyId(null);
-    if (deleteResult.error) setNotice({ kind: "info", text: "تم تصفير العداد وعزل القراءات القديمة، لكن تعذر حذف نسختها المؤرشفة الآن." });
+    const deleteError = deleteDailyResult.error || deleteCountersResult.error || deleteRawResult.error;
+    if (deleteError) setNotice({ kind: "info", text: `بدأ العداد الجديد، لكن تعذر تنظيف جزء من البيانات: ${deleteError.message}` });
     else if (resetCommandError) setNotice({ kind: "info", text: `تم تصفير السحابة، لكن تعذر إرسال تصفير الهاتف: ${resetCommandError}` });
     else if (realResetAvailable) setNotice({ kind: "ok", text: "تم تصفير السحابة، والهاتف سيقرأ قيم الراوتر الحالية كخط أساس جديد دون احتسابها." });
     else setNotice({ kind: "info", text: "تم تصفير السحابة. ثبّت تطبيق v0.6.0 ثم اضغط التصفير مرة أخرى لتصفير ذاكرة الهاتف أيضًا." });
