@@ -49,7 +49,13 @@ function rangeFor(preset: UsagePreset, fromDate: string, toDate: string): UsageR
   if (preset === "today") start.setHours(0, 0, 0, 0);
   if (preset === "week") { start.setDate(start.getDate() - 6); start.setHours(0, 0, 0, 0); }
   if (preset === "month") { start.setDate(1); start.setHours(0, 0, 0, 0); }
-  if (preset === "custom") { start = new Date(`${fromDate}T00:00:00`); end = new Date(`${toDate}T23:59:59.999`); }
+  if (preset === "custom") {
+    const safeFrom = fromDate || dateInputValue(now);
+    const safeTo = toDate || safeFrom;
+    start = new Date(`${safeFrom}T00:00:00`);
+    end = new Date(`${safeTo}T23:59:59.999`);
+    if (start > end) [start, end] = [new Date(`${safeTo}T00:00:00`), new Date(`${safeFrom}T23:59:59.999`)];
+  }
   const label = preset === "today" ? "اليوم" : preset === "week" ? "آخر 7 أيام" : preset === "month" ? "هذا الشهر" : `${fromDate} إلى ${toDate}`;
   return { from: start.toISOString(), to: end.toISOString(), label };
 }
@@ -188,7 +194,7 @@ export function HomeNetDashboard() {
     const values = { home_id: home.id, device_id: device.id, name: "جدول يومي", block_from: from, block_until: until, days_of_week: [0, 1, 2, 3, 4, 5, 6], enabled: true, updated_at: new Date().toISOString() };
     const result = device.schedule ? await supabase.from("homenet_schedules").update(values).eq("id", device.schedule.id).eq("home_id", home.id) : await supabase.from("homenet_schedules").insert(values);
     setBusyId(null);
-    if (result.error) setNotice({ kind: "error", text: result.error.message }); else { setNotice({ kind: "ok", text: "تم حفظ الجدول. تطبيق الهاتف v0.6 ينفّذه تلقائيًا كل يوم." }); await loadDashboard(); }
+    if (result.error) setNotice({ kind: "error", text: result.error.message }); else { setNotice({ kind: "ok", text: "تم حفظ الجدول. تطبيق الهاتف v0.5.0 أو أحدث ينفّذه تلقائيًا كل يوم." }); await loadDashboard(); }
   }
 
   async function deleteSchedule(device: Device) {
@@ -231,7 +237,7 @@ export function HomeNetDashboard() {
     <header className="topbar"><div className="brand"><span className="brand-mark">H</span><div><strong>HomeNet</strong><small>{home.name}</small></div></div><div className="header-actions"><button className="icon-button" aria-label="تحديث" disabled={loading} onClick={() => void loadDashboard()}>↻</button><button className="logout-button" onClick={() => void supabase.auth.signOut()}>خروج</button></div></header>
     <section className="hero-panel"><div><span className="eyebrow">نظرة سريعة</span><h1>شبكة المنزل</h1><p>{devices.length ? `تم العثور على ${devices.length} أجهزة محفوظة` : "بانتظار أول قراءة من الهاتف"}</p></div><div className={`agent-state ${isRecentlySeen(agent?.last_seen_at ?? null) ? "active" : "waiting"}`}><span className="pulse" /><div><strong>{isRecentlySeen(agent?.last_seen_at ?? null) ? "الهاتف يرفع قراءات" : "الهاتف لا يرفع الآن"}</strong><small>{relativeTime(agent?.last_seen_at ?? null)}</small></div></div></section>
     {notice && <div className={`notice ${notice.kind}`}>{notice.text}<button aria-label="إغلاق" onClick={() => setNotice(null)}>×</button></div>}
-    <section className="system-note"><span className="system-note-icon">i</span><div><strong>{internetControlAvailable ? "الفصل والتشغيل والجدولة جاهزة" : "التحكم ينتظر اتصال تطبيق الهاتف"}</strong><p>{internetControlAvailable ? "الهاتف ينفّذ أوامر الموقع. ثبّت v0.6 ليعمل جدول الفصل وإعادة التشغيل تلقائيًا في الخلفية." : "ثبّت آخر نسخة، سجّل دخول الراوتر والحساب، ثم شغّل الخدمة."}</p></div></section>
+    <section className="system-note"><span className="system-note-icon">i</span><div><strong>{internetControlAvailable ? "الفصل والتشغيل والجدولة جاهزة" : "التحكم ينتظر اتصال تطبيق الهاتف"}</strong><p>{internetControlAvailable ? "الهاتف ينفّذ أوامر الموقع والجداول تلقائيًا في الخلفية باستخدام v0.5.0 أو أحدث." : "ثبّت آخر نسخة، سجّل دخول الراوتر والحساب، ثم شغّل الخدمة."}</p></div></section>
 
     <section className="usage-filter"><div><span className="eyebrow">فترة الاستهلاك</span><h2>اعرض المدة التي تهمك</h2></div><div className="range-buttons"><button className={usagePreset === "today" ? "active" : ""} onClick={() => setUsagePreset("today")}>اليوم</button><button className={usagePreset === "week" ? "active" : ""} onClick={() => setUsagePreset("week")}>7 أيام</button><button className={usagePreset === "month" ? "active" : ""} onClick={() => setUsagePreset("month")}>الشهر</button><button className={usagePreset === "custom" ? "active" : ""} onClick={() => setUsagePreset("custom")}>من تاريخ إلى تاريخ</button></div>{usagePreset === "custom" ? <div className="date-fields global"><label>من<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label><label>إلى<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label></div> : null}</section>
 
