@@ -31,6 +31,7 @@ final class CloudSyncManager {
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 25_000;
     private static final int SYNC_BATCH_SIZE = 200;
+    private static final int MAX_BATCHES_PER_SYNC = 20;
 
     interface ResultCallback {
         void onResult(boolean success, String message);
@@ -96,18 +97,22 @@ final class CloudSyncManager {
             try {
                 String homeId = ensureHome();
                 ensureAgentHeartbeat(homeId);
-                List<HomeNetDatabase.TrafficSnapshot> snapshots = database.getUnsyncedSnapshots(SYNC_BATCH_SIZE);
                 int uploaded = 0;
-                for (HomeNetDatabase.TrafficSnapshot snapshot : snapshots) {
-                    String deviceId = ensureDevice(homeId, snapshot);
-                    uploadUsage(homeId, deviceId, snapshot);
-                    database.markSnapshotSynced(snapshot.id);
-                    uploaded++;
+                for (int batch = 0; batch < MAX_BATCHES_PER_SYNC; batch++) {
+                    List<HomeNetDatabase.TrafficSnapshot> snapshots = database.getUnsyncedSnapshots(SYNC_BATCH_SIZE);
+                    if (snapshots.isEmpty()) break;
+                    for (HomeNetDatabase.TrafficSnapshot snapshot : snapshots) {
+                        String deviceId = ensureDevice(homeId, snapshot);
+                        uploadUsage(homeId, deviceId, snapshot);
+                        database.markSnapshotSynced(snapshot.id);
+                        uploaded++;
+                    }
+                    if (snapshots.size() < SYNC_BATCH_SIZE) break;
                 }
                 int pending = database.countUnsyncedSnapshots();
                 String message = uploaded == 0
                         ? "كل القراءات مرفوعة بالفعل. لا توجد بيانات مؤجلة."
-                        : "تم رفع " + uploaded + " قراءة" + (pending > 0 ? "، ويتبقى " + pending + " للدفعة التالية." : " بنجاح.");
+                        : "تم رفع " + uploaded + " قراءة" + (pending > 0 ? "، ويتبقى " + pending + " وسيُعاد رفعها لاحقًا." : " بنجاح دون قراءات معلّقة.");
                 post(callback, true, message);
             } catch (Exception error) {
                 int pending = database.countUnsyncedSnapshots();
@@ -135,7 +140,7 @@ final class CloudSyncManager {
         JSONObject values = new JSONObject();
         values.put("home_id", homeId);
         values.put("name", "هاتف المراقبة");
-        values.put("app_version", "0.3.0");
+        values.put("app_version", "0.3.1");
         values.put("last_seen_at", isoTimestamp(System.currentTimeMillis()));
 
         if (agentId == null || agentId.isEmpty()) {

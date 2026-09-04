@@ -30,6 +30,19 @@ function relativeTime(value: string | null) {
   return `منذ ${Math.floor(minutes / 60)} ساعة`;
 }
 
+function periodStart(period: Device["quota_period"]) {
+  const value = new Date();
+  if (period === "one_time") return 0;
+  if (period === "weekly") return value.getTime() - (7 * 24 * 60 * 60 * 1000);
+  if (period === "monthly") value.setDate(1);
+  value.setHours(0, 0, 0, 0);
+  return value.getTime();
+}
+
+function isRecentlySeen(value: string | null) {
+  return Boolean(value && Date.now() - new Date(value).getTime() < 3 * 60 * 1000);
+}
+
 export function HomeNetDashboard() {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +55,7 @@ export function HomeNetDashboard() {
   const [commands, setCommands] = useState<Command[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [lastLoadedAt, setLastLoadedAt] = useState<Date | null>(null);
 
   const loadDashboard = useCallback(async () => {
     if (!session) return;
@@ -68,28 +82,44 @@ export function HomeNetDashboard() {
     }
 
     setHome(homeRow);
-    const since = new Date();
-    since.setDate(1);
-    since.setHours(0, 0, 0, 0);
-
-    const [agentResult, devicesResult, usageResult, commandsResult] = await Promise.all([
+    const [agentResult, devicesResult, addressesResult, usageResult, commandsResult] = await Promise.all([
       supabase.from("homenet_agents").select("id,app_version,last_seen_at").eq("home_id", homeRow.id).order("last_seen_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("homenet_devices").select("id,router_name,custom_name,current_ip,is_online,internet_enabled,quota_bytes,speed_limit_kbps,last_seen_at").eq("home_id", homeRow.id).order("is_online", { ascending: false }),
-      supabase.from("homenet_usage_samples").select("device_id,delta_bytes").eq("home_id", homeRow.id).gte("captured_at", since.toISOString()),
+      supabase.from("homenet_devices").select("id,router_name,custom_name,current_ip,is_online,internet_enabled,quota_bytes,quota_period,speed_limit_kbps,last_seen_at").eq("home_id", homeRow.id).order("current_ip", { ascending: true }),
+      supabase.from("homenet_device_addresses").select("device_id,mac").eq("home_id", homeRow.id),
+      supabase.from("homenet_usage_samples").select("device_id,delta_bytes,captured_at").eq("home_id", homeRow.id),
       supabase.from("homenet_commands").select("id,action,status,created_at,error_message").eq("home_id", homeRow.id).order("created_at", { ascending: false }).limit(8),
     ]);
 
-    const firstError = agentResult.error || devicesResult.error || usageResult.error || commandsResult.error;
+    const firstError = agentResult.error || devicesResult.error || addressesResult.error || usageResult.error || commandsResult.error;
     if (firstError) setNotice({ kind: "error", text: `تعذر تحديث البيانات: ${firstError.message}` });
 
-    const totals = new Map<string, number>();
+    const monthlyTotals = new Map<string, number>();
+    const periodTotals = new Map<string, number>();
+    const monthStart = periodStart("monthly");
+    const devicePeriods = new Map((devicesResult.data ?? []).map((device) => [device.id, device.quota_period as Device["quota_period"]]));
     for (const row of usageResult.data ?? []) {
-      totals.set(row.device_id, (totals.get(row.device_id) ?? 0) + Number(row.delta_bytes));
+      const capturedAt = new Date(row.captured_at).getTime();
+      if (capturedAt >= monthStart) monthlyTotals.set(row.device_id, (monthlyTotals.get(row.device_id) ?? 0) + Number(row.delta_bytes));
+      if (capturedAt >= periodStart(devicePeriods.get(row.device_id) ?? "monthly")) {
+        periodTotals.set(row.device_id, (periodTotals.get(row.device_id) ?? 0) + Number(row.delta_bytes));
+      }
+    }
+
+    const addresses = new Map<string, string[]>();
+    for (const row of addressesResult.data ?? []) {
+      addresses.set(row.device_id, [...(addresses.get(row.device_id) ?? []), row.mac]);
     }
 
     setAgent(agentResult.data ?? null);
-    setDevices((devicesResult.data ?? []).map((device) => ({ ...device, used_bytes: totals.get(device.id) ?? 0 })));
+    setDevices((devicesResult.data ?? []).map((device) => ({
+      ...device,
+      is_online: isRecentlySeen(device.last_seen_at),
+      used_bytes: periodTotals.get(device.id) ?? 0,
+      used_month_bytes: monthlyTotals.get(device.id) ?? 0,
+      mac_addresses: addresses.get(device.id) ?? [],
+    })) as Device[]);
     setCommands((commandsResult.data ?? []) as Command[]);
+    setLastLoadedAt(new Date());
     setLoading(false);
   }, [session]);
 
@@ -109,16 +139,20 @@ export function HomeNetDashboard() {
     const channel = supabase
       .channel(`homenet-dashboard-${session.user.id}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_devices" }, () => void loadDashboard())
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "homenet_usage_samples" }, () => void loadDashboard())
+      .on("postgres_changes", { event: "*", schema: "public", table: "homenet_agents" }, () => void loadDashboard())
       .on("postgres_changes", { event: "*", schema: "public", table: "homenet_commands" }, () => void loadDashboard())
       .subscribe();
+    const polling = window.setInterval(() => void loadDashboard(), 30_000);
 
     return () => {
       window.clearTimeout(initialLoad);
+      window.clearInterval(polling);
       void supabase.removeChannel(channel);
     };
   }, [loadDashboard, session]);
 
-  const totalUsage = useMemo(() => devices.reduce((sum, device) => sum + device.used_bytes, 0), [devices]);
+  const totalUsage = useMemo(() => devices.reduce((sum, device) => sum + device.used_month_bytes, 0), [devices]);
   const pendingCount = commands.filter((command) => command.status === "pending" || command.status === "processing").length;
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
@@ -176,16 +210,16 @@ export function HomeNetDashboard() {
     setBusyId(null);
   }
 
-  async function saveLimits(device: Device, quotaGb: number | null, speedMbps: number | null) {
+  async function saveLimits(device: Device, quotaGb: number | null, speedMbps: number | null, quotaPeriod: Device["quota_period"]) {
     if (!home) return;
     setBusyId(device.id);
     const quotaBytes = quotaGb === null ? null : Math.round(quotaGb * 1024 ** 3);
     const speedKbps = speedMbps === null ? null : Math.round(speedMbps * 1000);
-    const { error } = await supabase.from("homenet_devices").update({ quota_bytes: quotaBytes, speed_limit_kbps: speedKbps }).eq("id", device.id);
+    const { error } = await supabase.from("homenet_devices").update({ quota_bytes: quotaBytes, quota_period: quotaPeriod, speed_limit_kbps: speedKbps }).eq("id", device.id);
     if (error) setNotice({ kind: "error", text: error.message });
     else {
-      if (quotaBytes !== device.quota_bytes) await queueCommand("set_quota", device.id, { quota_bytes: quotaBytes });
-      if (speedKbps !== device.speed_limit_kbps) await queueCommand("set_speed", device.id, { speed_limit_kbps: speedKbps });
+      setNotice({ kind: "ok", text: "تم حفظ حد الاستخدام ومدته. التطبيق على الراوتر سيتفعّل بعد إكمال ربط Access Control." });
+      await loadDashboard();
     }
     setBusyId(null);
   }
@@ -201,7 +235,7 @@ export function HomeNetDashboard() {
       block_until: until,
     });
     if (error) setNotice({ kind: "error", text: error.message });
-    else await queueCommand("apply_schedule", device.id, { block_from: from, block_until: until, days_of_week: [0, 1, 2, 3, 4, 5, 6] });
+    else setNotice({ kind: "ok", text: "تم حفظ الجدول. التنفيذ الفعلي سيتفعّل بعد إكمال ربط Access Control." });
     setBusyId(null);
   }
 
@@ -214,9 +248,9 @@ export function HomeNetDashboard() {
       <main className="auth-shell">
         <section className="auth-intro">
           <span className="eyebrow">HOME NETWORK CONTROL</span>
-          <h1>شبكتك تحت سيطرتك.<br /><em>حتى لو الإنترنت فصل.</em></h1>
-          <p>استهلاك كل جهاز، حدود جيجات، جداول فصل، وأوامر محفوظة تُنفّذ تلقائيًا عند عودة الاتصال.</p>
-          <div className="feature-row"><span>● قراءة حقيقية</span><span>● طابور أوامر آمن</span><span>● أسماء أجهزتك</span></div>
+          <h1>شبكتك واضحة.<br /><em>جهازًا بجهاز.</em></h1>
+          <p>تابع الاستهلاك الحقيقي والأسماء، واحفظ حد الجيجات المناسب لكل جهاز من شاشة واحدة.</p>
+          <div className="feature-row"><span>● قراءة حقيقية</span><span>● 8 أجهزة محفوظة</span><span>● أسماء أجهزتك</span></div>
         </section>
         <section className="auth-card">
           <div className="brand"><span className="brand-mark">H</span><div><strong>HomeNet</strong><small>لوحة إدارة المنزل</small></div></div>
@@ -263,32 +297,38 @@ export function HomeNetDashboard() {
       </header>
 
       <section className="hero-panel">
-        <div><span className="eyebrow">لوحة التحكم المباشرة</span><h1>مساء الخير 👋</h1><p>كل ما يحدث على شبكتك في مكان واحد.</p></div>
-        <div className={`agent-state ${agent?.last_seen_at ? "active" : "waiting"}`}>
-          <span className="pulse" /><div><strong>{agent?.last_seen_at ? "الهاتف متصل" : "بانتظار ربط الهاتف"}</strong><small>{relativeTime(agent?.last_seen_at ?? null)}</small></div>
+        <div><span className="eyebrow">نظرة سريعة</span><h1>شبكة المنزل</h1><p>{devices.length ? `تم العثور على ${devices.length} أجهزة محفوظة` : "بانتظار أول قراءة من الهاتف"}</p></div>
+        <div className={`agent-state ${isRecentlySeen(agent?.last_seen_at ?? null) ? "active" : "waiting"}`}>
+          <span className="pulse" /><div><strong>{isRecentlySeen(agent?.last_seen_at ?? null) ? "الهاتف يرفع قراءات" : "الهاتف لا يرفع الآن"}</strong><small>{relativeTime(agent?.last_seen_at ?? null)}</small></div>
         </div>
       </section>
 
       {notice && <div className={`notice ${notice.kind}`}>{notice.text}<button aria-label="إغلاق" onClick={() => setNotice(null)}>×</button></div>}
 
+      <section className="system-note">
+        <span className="system-note-icon">i</span>
+        <div><strong>المراقبة تعمل، والتحكم في الراوتر ما زال قيد الربط</strong><p>الأرقام والأسماء تُزامن من الهاتف. فصل الإنترنت وتطبيق السرعة فعليًا يحتاجان اختبار صفحة Access Control في TL‑WR840N؛ لن نعرض أمرًا محفوظًا كأنه نُفّذ.</p></div>
+      </section>
+
       <section className="stats-grid">
-        <article className="stat-card accent"><span>استهلاك الشهر</span><strong>{formatBytes(totalUsage)}</strong><small>مجموع كل الأجهزة</small></article>
-        <article className="stat-card"><span>الأجهزة الآن</span><strong>{devices.filter((device) => device.is_online).length}<i> / {devices.length}</i></strong><small>متصل / معروف</small></article>
-        <article className="stat-card"><span>الأوامر المنتظرة</span><strong>{pendingCount}</strong><small>محفوظة حتى عودة الاتصال</small></article>
+        <article className="stat-card accent"><span>استهلاك الشهر</span><strong>{formatBytes(totalUsage)}</strong><small>من أول الشهر الميلادي</small></article>
+        <article className="stat-card"><span>الأجهزة المعروفة</span><strong>{devices.length}</strong><small>{devices.filter((device) => device.is_online).length} ظهرت خلال آخر 3 دقائق</small></article>
+        <article className="stat-card"><span>أوامر غير منفذة</span><strong>{pendingCount}</strong><small>تنتظر دعم التحكم في الراوتر</small></article>
+        <article className="stat-card"><span>آخر تحديث للوحة</span><strong className="small-value">{lastLoadedAt ? lastLoadedAt.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" }) : "—"}</strong><small>تحديث تلقائي كل 30 ثانية</small></article>
       </section>
 
       <section className="section-heading">
         <div><span className="eyebrow">الأجهزة</span><h2>أجهزة المنزل</h2></div>
         <div className="toolbar">
-          <button className="secondary-button" disabled={!home || busyId === "sync"} onClick={() => { setBusyId("sync"); void queueCommand("sync_now").finally(() => setBusyId(null)); }}>مزامنة الآن</button>
-          <button className="secondary-button" disabled={!home || busyId === "names"} onClick={() => { setBusyId("names"); void queueCommand("refresh_names").finally(() => setBusyId(null)); }}>تحديث الأسماء</button>
+          <button className="secondary-button" disabled={loading} onClick={() => void loadDashboard()}>تحديث اللوحة</button>
+          <button className="secondary-button" disabled title="سيعمل بعد ربط أوامر تطبيق الهاتف">تحديث الأسماء من الراوتر</button>
         </div>
       </section>
 
       {loading ? <div className="loader" aria-label="جارٍ تحديث البيانات" /> : devices.length ? (
         <section className="devices-grid">
           {devices.map((device) => (
-            <DeviceCard key={device.id} device={device} busy={busyId === device.id} onQueueInternet={queueInternet} onSaveLimits={saveLimits} onSaveSchedule={saveSchedule} />
+            <DeviceCard key={device.id} device={device} busy={busyId === device.id} controlAvailable={false} onQueueInternet={queueInternet} onSaveLimits={saveLimits} onSaveSchedule={saveSchedule} />
           ))}
         </section>
       ) : (
@@ -299,7 +339,7 @@ export function HomeNetDashboard() {
       )}
 
       <section className="queue-panel">
-        <div className="section-heading"><div><span className="eyebrow">التنفيذ المضمون</span><h2>آخر الأوامر</h2></div></div>
+        <div className="section-heading"><div><span className="eyebrow">سجل التجهيز</span><h2>الأوامر المحفوظة</h2><p className="muted">هذه الأوامر لم تُنفذ على الراوتر حتى الآن.</p></div></div>
         {commands.length ? <div className="command-list">{commands.map((command) => (
           <div className="command-row" key={command.id}>
             <span className={`command-dot ${command.status}`} />

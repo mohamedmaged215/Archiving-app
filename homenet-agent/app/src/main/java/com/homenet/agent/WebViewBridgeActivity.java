@@ -61,12 +61,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.3.0");
+        title.setText("HomeNet Agent v0.3.1");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("اربط نفس حساب لوحة HomeNet مرة واحدة، ثم سجّل دخول الراوتر. القراءات تُحفظ محليًا وتُرفع عند توفر الإنترنت.");
+        help.setText("اربط نفس حساب لوحة HomeNet مرة واحدة، ثم سجّل دخول الراوتر. اترك التطبيق مفتوحًا أثناء القراءة التلقائية؛ إغلاقه يوقف القراءات الجديدة، ولا يمسح القراءات المحفوظة.");
         help.setTextSize(14);
         root.addView(help);
 
