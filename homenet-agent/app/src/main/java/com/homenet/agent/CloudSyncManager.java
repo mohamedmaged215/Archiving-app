@@ -49,9 +49,10 @@ final class CloudSyncManager {
         final String deviceName;
         final String ip;
         final String mac;
+        final int attempts;
 
         RouterCommand(String id, String deviceId, String action, JSONObject payload,
-                      String deviceName, String ip, String mac) {
+                      String deviceName, String ip, String mac, int attempts) {
             this.id = id;
             this.deviceId = deviceId;
             this.action = action;
@@ -59,6 +60,7 @@ final class CloudSyncManager {
             this.deviceName = deviceName;
             this.ip = ip;
             this.mac = mac;
+            this.attempts = attempts;
         }
     }
 
@@ -77,7 +79,14 @@ final class CloudSyncManager {
     }
 
     boolean hasSession() {
+        reloadSession();
         return accessToken != null && !accessToken.isEmpty() && refreshToken != null && !refreshToken.isEmpty();
+    }
+
+    private void reloadSession() {
+        accessToken = preferences.getString("access_token", "");
+        refreshToken = preferences.getString("refresh_token", "");
+        userId = preferences.getString("user_id", "");
     }
 
     void login(String email, String password, ResultCallback callback) {
@@ -165,7 +174,7 @@ final class CloudSyncManager {
         JSONObject values = new JSONObject();
         values.put("home_id", homeId);
         values.put("name", "هاتف المراقبة");
-        values.put("app_version", "0.4.0");
+        values.put("app_version", "0.5.0");
         values.put("last_seen_at", isoTimestamp(System.currentTimeMillis()));
 
         if (agentId == null || agentId.isEmpty()) {
@@ -328,7 +337,8 @@ final class CloudSyncManager {
                         row.optJSONObject("payload") == null ? new JSONObject() : row.getJSONObject("payload"),
                         customName.isEmpty() ? routerName : customName,
                         device.optString("current_ip", ""),
-                        addresses.getJSONObject(0).getString("mac")
+                        addresses.getJSONObject(0).getString("mac"),
+                        row.optInt("attempts", 0) + 1
                 );
                 mainHandler.post(() -> callback.onResult(command, "تم استلام الأمر."));
             } catch (Exception error) {
@@ -369,6 +379,30 @@ final class CloudSyncManager {
                 post(callback, success, success ? "تم تنفيذ الأمر على الراوتر بنجاح." : errorMessage);
             } catch (Exception error) {
                 post(callback, false, "تعذر تحديث نتيجة الأمر: " + safeMessage(error));
+            }
+        });
+    }
+
+    void retryCommand(RouterCommand command, String errorMessage, long delayMs, ResultCallback callback) {
+        executor.execute(() -> {
+            try {
+                JSONObject values = new JSONObject();
+                values.put("status", "pending");
+                values.put("scheduled_for", isoTimestamp(System.currentTimeMillis() + Math.max(30_000L, delayMs)));
+                values.put("claimed_at", JSONObject.NULL);
+                values.put("completed_at", JSONObject.NULL);
+                values.put("updated_at", isoTimestamp(System.currentTimeMillis()));
+                values.put("error_message", errorMessage == null ? "الراوتر غير متاح؛ ستتم إعادة المحاولة." : errorMessage);
+                HttpResult updated = authorizedRequest(
+                        "PATCH",
+                        "/rest/v1/homenet_commands?id=eq." + encode(command.id) + "&status=eq.processing",
+                        values.toString(),
+                        "return=minimal"
+                );
+                requireSuccess(updated, "تعذر إعادة الأمر إلى الطابور");
+                post(callback, true, "سيُعاد تنفيذ الأمر تلقائيًا عند رجوع الراوتر.");
+            } catch (Exception error) {
+                post(callback, false, "تعذر حفظ إعادة المحاولة: " + safeMessage(error));
             }
         });
     }

@@ -1,9 +1,16 @@
 package com.homenet.agent;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.text.method.ScrollingMovementMethod;
 import android.text.InputType;
 import android.view.View;
@@ -52,12 +59,18 @@ public class WebViewBridgeActivity extends Activity {
     private Button cloudLoginButton;
     private Button cloudSyncButton;
     private TextView cloudState;
+    private RouterCredentialsStore credentialsStore;
+    private EditText routerAddressField;
+    private EditText routerUsernameField;
+    private EditText routerPasswordField;
+    private TextView backgroundState;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         database = new HomeNetDatabase(this);
         cloudSync = new CloudSyncManager(this);
+        credentialsStore = new RouterCredentialsStore(this);
         autoCaptureHandler = new Handler(Looper.getMainLooper());
         commandHandler = new Handler(Looper.getMainLooper());
         LinearLayout root = new LinearLayout(this);
@@ -66,12 +79,12 @@ public class WebViewBridgeActivity extends Activity {
         root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         TextView title = new TextView(this);
-        title.setText("HomeNet Agent v0.4.0");
+        title.setText("HomeNet Agent v0.5.0");
         title.setTextSize(22);
         root.addView(title);
 
         TextView help = new TextView(this);
-        help.setText("اربط حساب HomeNet وسجّل دخول الراوتر. اترك التطبيق مفتوحًا لتسجيل الاستهلاك وتنفيذ أوامر الفصل الآمنة القادمة من الموقع.");
+        help.setText("احفظ بيانات الراوتر مرة واحدة ثم شغّل المراقبة بالخلفية. بعدها يمكنك سحب التطبيق من التطبيقات الأخيرة وسيستمر العمل.");
         help.setTextSize(14);
         root.addView(help);
 
@@ -91,7 +104,9 @@ public class WebViewBridgeActivity extends Activity {
         readDevices.setText("قراءة الأجهزة");
         secondaryButtons.addView(readDevices, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         autoCaptureButton = new Button(this);
-        autoCaptureButton.setText("تشغيل القراءة التلقائية");
+        autoCaptureButton.setText(HomeNetBackgroundService.isEnabled(this)
+                ? "إيقاف المراقبة بالخلفية"
+                : "تشغيل المراقبة بالخلفية");
         secondaryButtons.addView(autoCaptureButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(secondaryButtons);
 
@@ -103,8 +118,43 @@ public class WebViewBridgeActivity extends Activity {
         usageSummary.setText("ملخص الاستهلاك");
         root.addView(usageSummary, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        TextView routerLoginTitle = new TextView(this);
+        routerLoginTitle.setText("بيانات الراوتر — تُحفظ مشفّرة على هذا الهاتف فقط");
+        routerLoginTitle.setTextSize(14);
+        routerLoginTitle.setPadding(dp(6), dp(10), dp(6), 0);
+        root.addView(routerLoginTitle);
+
+        routerAddressField = new EditText(this);
+        routerAddressField.setHint("عنوان الراوتر");
+        routerAddressField.setSingleLine(true);
+        routerAddressField.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        routerAddressField.setText(credentialsStore.savedAddress());
+        root.addView(routerAddressField, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        routerUsernameField = new EditText(this);
+        routerUsernameField.setHint("اسم مستخدم الراوتر");
+        routerUsernameField.setSingleLine(true);
+        routerUsernameField.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        routerUsernameField.setText(credentialsStore.savedUsername());
+        root.addView(routerUsernameField, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        routerPasswordField = new EditText(this);
+        routerPasswordField.setHint(credentialsStore.hasCredentials()
+                ? "كلمة المرور محفوظة — اتركها فارغة للاحتفاظ بها"
+                : "كلمة مرور الراوتر");
+        routerPasswordField.setSingleLine(true);
+        routerPasswordField.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        routerPasswordField.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        root.addView(routerPasswordField, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        backgroundState = new TextView(this);
+        backgroundState.setText(HomeNetBackgroundService.lastStatus(this));
+        backgroundState.setTextSize(12);
+        backgroundState.setPadding(dp(6), 0, dp(6), dp(6));
+        root.addView(backgroundState);
+
         remoteControlButton = new Button(this);
-        remoteControlButton.setText("تشغيل التحكم من الموقع");
+        remoteControlButton.setText("إعداد البطارية لهاتف Samsung");
         root.addView(remoteControlButton, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         cloudEmail = new EditText(this);
@@ -175,13 +225,73 @@ public class WebViewBridgeActivity extends Activity {
         readDevices.setOnClickListener(v -> readDevices(false));
         readDeviceNames.setOnClickListener(v -> openDhcpClientsAndReadNames(0));
         usageSummary.setOnClickListener(v -> showUsageSummary());
-        remoteControlButton.setOnClickListener(v -> toggleRemoteControl());
-        autoCaptureButton.setOnClickListener(v -> toggleAutoCapture());
+        remoteControlButton.setOnClickListener(v -> openBatterySettings());
+        autoCaptureButton.setOnClickListener(v -> toggleBackgroundService());
         cloudLoginButton.setOnClickListener(v -> handleCloudLogin());
         cloudSyncButton.setOnClickListener(v -> syncCloud(true));
         setContentView(root);
         web.loadUrl(routerBase);
+        requestNotificationPermission();
+        if (HomeNetBackgroundService.isEnabled(this) && credentialsStore.hasCredentials()) {
+            HomeNetBackgroundService.start(this);
+        }
         if (cloudSync.hasSession()) syncCloud(false);
+    }
+
+    private void toggleBackgroundService() {
+        if (HomeNetBackgroundService.isEnabled(this)) {
+            HomeNetBackgroundService.stop(this);
+            autoCaptureButton.setText("تشغيل المراقبة بالخلفية");
+            backgroundState.setText("تم إيقاف المراقبة بالخلفية.");
+            return;
+        }
+        try {
+            String password = routerPasswordField.getText().toString();
+            if (password.isEmpty() && credentialsStore.hasCredentials()) {
+                password = credentialsStore.load().password;
+            }
+            credentialsStore.save(
+                    routerAddressField.getText().toString(),
+                    routerUsernameField.getText().toString(),
+                    password
+            );
+            routerPasswordField.setText("");
+            routerPasswordField.setHint("كلمة المرور محفوظة — اتركها فارغة للاحتفاظ بها");
+            requestNotificationPermission();
+            HomeNetBackgroundService.start(this);
+            autoCaptureButton.setText("إيقاف المراقبة بالخلفية");
+            backgroundState.setText("بدأت الخدمة. يمكنك الآن سحب التطبيق من التطبيقات الأخيرة.");
+        } catch (Exception error) {
+            backgroundState.setText(error.getMessage() == null ? "تعذر حفظ بيانات الراوتر." : error.getMessage());
+        }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 840);
+        }
+    }
+
+    private void openBatterySettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+                if (!powerManager.isIgnoringBatteryOptimizations(getPackageName())) {
+                    Intent request = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    request.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(request);
+                    backgroundState.setText("اختر سماح. ثم في إعدادات بطارية Samsung اجعل HomeNet: غير مقيّد.");
+                    return;
+                }
+            }
+            Intent details = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            details.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(details);
+            backgroundState.setText("افتح البطارية ثم اختر: غير مقيّد، وتأكد أنه ليس ضمن التطبيقات النائمة.");
+        } catch (Exception error) {
+            backgroundState.setText("افتح إعدادات الهاتف > التطبيقات > HomeNet Agent > البطارية > غير مقيّد.");
+        }
     }
 
     private void handleCloudLogin() {
@@ -772,6 +882,17 @@ public class WebViewBridgeActivity extends Activity {
     }
 
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
+    @Override protected void onResume(){
+        super.onResume();
+        if(backgroundState!=null){
+            backgroundState.setText(HomeNetBackgroundService.lastStatus(this));
+        }
+        if(autoCaptureButton!=null){
+            autoCaptureButton.setText(HomeNetBackgroundService.isEnabled(this)
+                    ? "إيقاف المراقبة بالخلفية"
+                    : "تشغيل المراقبة بالخلفية");
+        }
+    }
     @Override protected void onDestroy(){
         autoCaptureEnabled=false;
         remoteControlEnabled=false;
