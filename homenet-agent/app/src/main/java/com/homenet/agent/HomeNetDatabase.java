@@ -11,7 +11,7 @@ import java.util.List;
 
 final class HomeNetDatabase extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "homenet.db";
-    private static final int DATABASE_VERSION = 3;
+    private static final int DATABASE_VERSION = 4;
     // The TL-WR840N is a 100 Mbps router. This deliberately generous ceiling
     // rejects parser/counter jumps without clipping legitimate traffic.
     private static final long MAX_PLAUSIBLE_BYTES_PER_SECOND = 25_000_000L;
@@ -50,6 +50,11 @@ final class HomeNetDatabase extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE traffic_snapshots ADD COLUMN cloud_synced INTEGER NOT NULL DEFAULT 0");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_traffic_snapshots_cloud_pending " +
                     "ON traffic_snapshots(cloud_synced, captured_at, id)");
+        }
+        if (oldVersion < 4) {
+            // v0.5 could mix legacy WebView rows with direct router readings.
+            // Keep identities/settings, but start the usage history from a clean baseline.
+            db.delete("traffic_snapshots", null, null);
         }
     }
 
