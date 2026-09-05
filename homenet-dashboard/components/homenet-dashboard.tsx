@@ -214,12 +214,16 @@ export function HomeNetDashboard() {
     else { setNotice({ kind: "ok", text: `تم تغيير اسم الجهاز إلى «${name.trim()}».` }); await loadDashboard(); }
   }
 
-  async function saveLimits(device: Device, quotaGb: number | null, speedMbps: number | null, quotaPeriod: Device["quota_period"]) {
+  async function saveLimits(device: Device, quotaGb: number | null, quotaPeriod: Device["quota_period"]) {
     if (!home) return;
+    if (quotaGb !== null && (!Number.isFinite(quotaGb) || quotaGb < 0 || !Number.isSafeInteger(Math.round(quotaGb * 1024 ** 3)))) {
+      setNotice({ kind: "error", text: "اكتب حد استهلاك صحيحًا أكبر من أو يساوي صفرًا." });
+      return;
+    }
     setBusyId(device.id);
-    const { error } = await supabase.from("homenet_devices").update({ quota_bytes: quotaGb === null ? null : Math.round(quotaGb * 1024 ** 3), quota_period: quotaPeriod, speed_limit_kbps: speedMbps === null ? null : Math.round(speedMbps * 1000) }).eq("id", device.id).eq("home_id", home.id);
+    const { error } = await supabase.from("homenet_devices").update({ quota_bytes: quotaGb === null ? null : Math.round(quotaGb * 1024 ** 3), quota_period: quotaPeriod }).eq("id", device.id).eq("home_id", home.id);
     setBusyId(null);
-    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: "تم حفظ الحد ومدته." }); await loadDashboard(); }
+    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: "تم حفظ حد الاستهلاك ومدته للمتابعة. الفصل التلقائي عند نفاد الباقة غير مفعّل حاليًا." }); await loadDashboard(); }
   }
 
   async function saveSchedule(device: Device, from: string, until: string) {

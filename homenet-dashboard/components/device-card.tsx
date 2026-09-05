@@ -10,7 +10,7 @@ type DeviceCardProps = {
   globalRange: UsageRange;
   onQueueInternet: (device: Device) => Promise<void>;
   onRename: (device: Device, name: string) => Promise<void>;
-  onSaveLimits: (device: Device, quotaGb: number | null, speedMbps: number | null, period: Device["quota_period"]) => Promise<void>;
+  onSaveLimits: (device: Device, quotaGb: number | null, period: Device["quota_period"]) => Promise<void>;
   onSaveSchedule: (device: Device, from: string, until: string) => Promise<void>;
   onDeleteSchedule: (device: Device) => Promise<void>;
   onLoadUsage: (deviceId: string, range: UsageRange) => Promise<number>;
@@ -52,7 +52,6 @@ function makeRange(preset: UsagePreset, fromDate: string, toDate: string): Usage
 export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueueInternet, onRename, onSaveLimits, onSaveSchedule, onDeleteSchedule, onLoadUsage }: DeviceCardProps) {
   const today = dateInputValue(new Date());
   const [quota, setQuota] = useState(device.quota_bytes ? String(device.quota_bytes / 1024 ** 3) : "");
-  const [speed, setSpeed] = useState(device.speed_limit_kbps ? String(device.speed_limit_kbps / 1000) : "");
   const [period, setPeriod] = useState<Device["quota_period"]>(device.quota_period);
   const [from, setFrom] = useState(device.schedule?.block_from.slice(0, 5) ?? "23:00");
   const [until, setUntil] = useState(device.schedule?.block_until.slice(0, 5) ?? "07:00");
@@ -97,19 +96,21 @@ export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueu
       {!controlAvailable ? <p className="control-hint">يلزم تثبيت آخر نسخة وتشغيل خدمة HomeNet على الهاتف.</p> : null}
 
       {detailsOpen ? <section className="control-details" aria-label={`إعدادات ${name}`}>
+        <p className="control-hint">آخر قراءة: {device.last_seen_at ? new Date(device.last_seen_at).toLocaleString("ar-EG", { timeZone: "Africa/Cairo" }) : "لم تصل قراءة بعد"} — بتوقيت القاهرة. يحتفظ النظام بالجهاز وسجله عند توقف القراءات؛ «غير نشط» لا يؤكد وحده أنه مفصول عن الواي فاي.</p>
         <h4>استهلاك الجهاز حسب المدة</h4>
         <div className="range-buttons compact"><button className={usagePreset === "today" ? "active" : ""} onClick={() => void loadDetailUsage("today")}>اليوم</button><button className={usagePreset === "week" ? "active" : ""} onClick={() => void loadDetailUsage("week")}>7 أيام</button><button className={usagePreset === "month" ? "active" : ""} onClick={() => void loadDetailUsage("month")}>الشهر</button><button className={usagePreset === "custom" ? "active" : ""} onClick={() => setUsagePreset("custom")}>من–إلى</button></div>
         {usagePreset === "custom" ? <div className="date-fields"><label>من<input type="date" value={fromDate} onChange={(event) => setFromDate(event.target.value)} /></label><label>إلى<input type="date" value={toDate} onChange={(event) => setToDate(event.target.value)} /></label><button className="secondary-button" onClick={() => void loadDetailUsage("custom")}>عرض</button></div> : null}
         <div className="detail-usage"><span>{usageLoading ? "جارٍ الحساب…" : detailUsage === null ? `المعروض أعلى البطاقة: ${globalRange.label}` : "استهلاك المدة المختارة"}</span><strong>{usageLoading ? "—" : bytesToText(detailUsage ?? device.used_bytes)}</strong></div>
 
-        <h4>حد الاستخدام والسرعة</h4>
-        <div className="control-grid"><label>حد الاستهلاك (GB)<input inputMode="decimal" min="0" step="0.25" value={quota} onChange={(event) => setQuota(event.target.value)} placeholder="بدون حد" type="number" /></label><label>حد السرعة (Mbps)<input inputMode="decimal" min="0" step="0.5" value={speed} onChange={(event) => setSpeed(event.target.value)} placeholder="بدون حد" type="number" /></label><label className="period-field">مدة حد الاستهلاك<select value={period} onChange={(event) => setPeriod(event.target.value as Device["quota_period"])}><option value="daily">يوميًا</option><option value="weekly">كل 7 أيام</option><option value="monthly">كل شهر ميلادي</option><option value="one_time">من بداية العداد</option></select></label></div>
-        <button className="secondary-button full-button" disabled={busy} onClick={() => void onSaveLimits(device, quota ? Number(quota) : null, speed ? Number(speed) : null, period)}>حفظ الحدود</button>
+        <h4>حد الاستهلاك</h4>
+        <div className="control-grid"><label>حد الاستهلاك (GB)<input inputMode="decimal" min="0" step="0.01" value={quota} onChange={(event) => setQuota(event.target.value)} placeholder="بدون حد" type="number" /></label><label>مدة حد الاستهلاك<select value={period} onChange={(event) => setPeriod(event.target.value as Device["quota_period"])}><option value="daily">اليوم الحالي</option><option value="weekly">آخر 7 أيام (فترة متحركة)</option><option value="monthly">الشهر الميلادي الحالي</option><option value="one_time">من بداية العداد</option></select></label></div>
+        <button className="secondary-button full-button" disabled={busy || (quota !== "" && (!Number.isFinite(Number(quota)) || Number(quota) < 0))} onClick={() => void onSaveLimits(device, quota ? Number(quota) : null, period)}>حفظ حد الاستهلاك</button>
+        <p className="control-hint">للمتابعة حاليًا: يعرض المستهلك من الباقة، ولا يفصل الإنترنت تلقائيًا عند بلوغ الحد. تُحتسب قراءات المدة كاملة، بما فيها الاستهلاك السابق لحفظ الحد.</p>
 
         <h4>جدول الفصل اليومي {device.schedule?.enabled ? <span className="schedule-live">● فعال</span> : null}</h4>
         <div className="schedule-row"><label>فصل من<input type="time" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>حتى<input type="time" value={until} onChange={(event) => setUntil(event.target.value)} /></label></div>
         <div className="schedule-actions"><button className="secondary-button" disabled={busy || !from || !until} onClick={() => void onSaveSchedule(device, from, until)}>{device.schedule ? "تحديث الجدول" : "تشغيل الجدول"}</button>{device.schedule ? <button className="danger-outline" disabled={busy} onClick={() => void onDeleteSchedule(device)}>إلغاء الجدول</button> : null}</div>
-        <p className="control-hint">يفصل ويعيد الإنترنت تلقائيًا كل يوم، حتى لو أغلقت شاشة التطبيق.</p>
+        <p className="control-hint">المواعيد بتوقيت القاهرة، وتتكرر يوميًا. تُراجع كل دقيقة ويستلمها الهاتف أثناء اتصال خدمته بالإنترنت والراوتر؛ التنفيذ قد يتأخر عن الموعد. هذه مواعيد فصل وتشغيل وليست عداد ساعات استخدام.</p>
       </section> : null}
     </article>
   );
