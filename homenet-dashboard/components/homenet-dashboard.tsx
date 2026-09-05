@@ -182,7 +182,7 @@ export function HomeNetDashboard() {
   async function queueInternet(device: Device) {
     if (!home) return;
     setBusyId(device.id);
-    const nextEnabled = !device.internet_enabled;
+    const nextEnabled = !device.is_approved || !device.internet_enabled;
     if (nextEnabled && !device.is_approved) {
       const approvalResult = await supabase.from("homenet_devices")
         .update({ is_approved: true, updated_at: new Date().toISOString() })
@@ -223,7 +223,7 @@ export function HomeNetDashboard() {
     setBusyId(device.id);
     const { error } = await supabase.from("homenet_devices").update({ quota_bytes: quotaGb === null ? null : Math.round(quotaGb * 1024 ** 3), quota_period: quotaPeriod }).eq("id", device.id).eq("home_id", home.id);
     setBusyId(null);
-    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: "تم حفظ حد الاستهلاك ومدته للمتابعة. الفصل التلقائي عند نفاد الباقة غير مفعّل حاليًا." }); await loadDashboard(); }
+    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: quotaGb === null ? "تم إلغاء حد الاستهلاك." : "تم حفظ الباقة. يفصل الإنترنت عند نفادها ويرجع مع التجديد، حسب الجدول وحالة الفصل اليدوي." }); await loadDashboard(); }
   }
 
   async function saveSchedule(device: Device, from: string, until: string) {
@@ -240,7 +240,7 @@ export function HomeNetDashboard() {
     setBusyId(device.id);
     const { error } = await supabase.from("homenet_schedules").delete().eq("id", device.schedule.id).eq("home_id", home.id);
     setBusyId(null);
-    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: "تم إلغاء الجدول. حالة الإنترنت الحالية لن تتغير إلا بأمر منك." }); await loadDashboard(); }
+    if (error) setNotice({ kind: "error", text: error.message }); else { setNotice({ kind: "ok", text: "تم إلغاء الجدول. سيعود الإنترنت إذا كانت الباقة متاحة والجهاز مسموحًا له." }); await loadDashboard(); }
   }
 
   async function loadDeviceUsage(deviceId: string, range: UsageRange) {
