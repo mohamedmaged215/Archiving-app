@@ -51,7 +51,9 @@ function makeRange(preset: UsagePreset, fromDate: string, toDate: string): Usage
 
 export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueueInternet, onRename, onSaveLimits, onSaveSchedule, onDeleteSchedule, onLoadUsage }: DeviceCardProps) {
   const today = dateInputValue(new Date());
-  const [quota, setQuota] = useState(device.quota_bytes !== null ? String(device.quota_bytes / 1024 ** 3) : "");
+  const initialQuotaUnit = device.quota_bytes !== null && device.quota_bytes < 1024 ** 3 ? "MB" : "GB";
+  const [quotaUnit, setQuotaUnit] = useState<"MB" | "GB">(initialQuotaUnit);
+  const [quota, setQuota] = useState(device.quota_bytes !== null ? String(device.quota_bytes / 1024 ** (initialQuotaUnit === "MB" ? 2 : 3)) : "");
   const [period, setPeriod] = useState<Device["quota_period"]>(device.quota_bytes === null ? "daily" : device.quota_period);
   const [from, setFrom] = useState(device.schedule?.block_from.slice(0, 5) ?? "23:00");
   const [until, setUntil] = useState(device.schedule?.block_until.slice(0, 5) ?? "07:00");
@@ -69,6 +71,14 @@ export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueu
   const hasQuota = device.quota_bytes !== null;
   const exhausted = hasQuota && device.quota_used_bytes >= quotaBytes;
   const percentage = hasQuota ? quotaBytes > 0 ? Math.min(100, (device.quota_used_bytes / quotaBytes) * 100) : 100 : 0;
+
+  function changeQuotaUnit(nextUnit: "MB" | "GB") {
+    if (nextUnit === quotaUnit) return;
+    if (quota !== "" && Number.isFinite(Number(quota))) {
+      setQuota(String(nextUnit === "MB" ? Number(quota) * 1024 : Number(quota) / 1024));
+    }
+    setQuotaUnit(nextUnit);
+  }
 
   async function loadDetailUsage(preset: UsagePreset) {
     if (preset === "custom" && (!fromDate || !toDate || fromDate > toDate)) return;
@@ -104,8 +114,8 @@ export function DeviceCard({ device, busy, controlAvailable, globalRange, onQueu
         <div className="detail-usage"><span>{usageLoading ? "جارٍ الحساب…" : detailUsage === null ? `المعروض أعلى البطاقة: ${globalRange.label}` : "استهلاك المدة المختارة"}</span><strong>{usageLoading ? "—" : bytesToText(detailUsage ?? device.used_bytes)}</strong></div>
 
         <h4>باقة الإنترنت <span className="schedule-live">● فصل تلقائي عند النفاد</span></h4>
-        <div className="control-grid"><label>حجم الباقة (GB)<input inputMode="decimal" min="0" step="0.01" value={quota} onChange={(event) => setQuota(event.target.value)} placeholder="مثال: 3" type="number" /></label><label>تجديد الباقة<select value={period} onChange={(event) => setPeriod(event.target.value as Device["quota_period"])}><option value="daily">يومي — الساعة 12 ليلًا</option><option value="weekly">أسبوعي — بداية السبت</option><option value="monthly">شهري — أول الشهر</option><option value="one_time">بدون تجديد تلقائي</option></select></label></div>
-        <div className="schedule-actions"><button className="secondary-button" disabled={busy || quota === "" || !Number.isFinite(Number(quota)) || Number(quota) < 0} onClick={() => void onSaveLimits(device, Number(quota), period)}>حفظ الباقة</button>{hasQuota ? <button className="danger-outline" disabled={busy} onClick={() => void onSaveLimits(device, null, period).then(() => setQuota(""))}>إلغاء حد الاستهلاك</button> : null}</div>
+        <div className="control-grid"><label>حجم الباقة<input inputMode="decimal" min="0" step="any" value={quota} onChange={(event) => setQuota(event.target.value)} placeholder={quotaUnit === "MB" ? "مثال: 100" : "مثال: 3"} type="number" /></label><label>الوحدة<select value={quotaUnit} onChange={(event) => changeQuotaUnit(event.target.value as "MB" | "GB")}><option value="MB">ميجا (MB)</option><option value="GB">جيجا (GB)</option></select></label><label className="period-field">تجديد الباقة<select value={period} onChange={(event) => setPeriod(event.target.value as Device["quota_period"])}><option value="daily">يومي — الساعة 12 ليلًا</option><option value="weekly">أسبوعي — بداية السبت</option><option value="monthly">شهري — أول الشهر</option><option value="one_time">بدون تجديد تلقائي</option></select></label></div>
+        <div className="schedule-actions"><button className="secondary-button" disabled={busy || quota === "" || !Number.isFinite(Number(quota)) || Number(quota) < 0} onClick={() => void onSaveLimits(device, quotaUnit === "MB" ? Number(quota) / 1024 : Number(quota), period)}>حفظ الباقة</button>{hasQuota ? <button className="danger-outline" disabled={busy} onClick={() => void onSaveLimits(device, null, period).then(() => setQuota(""))}>إلغاء حد الاستهلاك</button> : null}</div>
 
         <h4>جدول الفصل اليومي {device.schedule?.enabled ? <span className="schedule-live">● فعال</span> : null}</h4>
         <div className="schedule-row"><label>فصل من<input type="time" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>حتى<input type="time" value={until} onChange={(event) => setUntil(event.target.value)} /></label></div>
